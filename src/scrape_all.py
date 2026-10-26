@@ -58,6 +58,7 @@ def history_start_confirmed(symbol, frame, first_timestamp):
 
 def download(connection, symbol, frame, batch_size, max_bars=0):
     table = table_name(symbol, frame)
+    time_offset = int(os.environ.get('MT5_TIME_OFFSET_SECONDS', '0'))
     create_schema(connection, table)
     cursor = datetime.now(timezone.utc)
     fetched = 0
@@ -80,7 +81,7 @@ def download(connection, symbol, frame, batch_size, max_bars=0):
         if any(int(rate['time']) > int(cursor.timestamp()) for rate in rates):
             raise RuntimeError(f'{table}: MT5 returned bars after the requested cursor')
         fetched += len(rates)
-        rows = [(symbol, frame, int(r['time']), float(r['open']), float(r['high']),
+        rows = [(symbol, frame, int(r['time']) - time_offset, float(r['open']), float(r['high']),
                  float(r['low']), float(r['close']), int(r['tick_volume']),
                  int(r['spread']), int(r['real_volume'])) for r in rates]
         with connection:
@@ -171,6 +172,7 @@ def main():
                         print(f'FAILED: {exc}', flush=True)
             integrity = connection.execute('PRAGMA integrity_check').fetchone()[0]
         summary = dict(max_bars_per_table=args.max_bars_per_table,
+                       timestamp_offset_seconds=int(os.environ.get('MT5_TIME_OFFSET_SECONDS', '0')),
                        history_scope="bounded test" if args.max_bars_per_table else "all available",
                        database=str(args.db.resolve()), maxbars=terminal.maxbars,
                        integrity_check=integrity, tables=report, failures=failures)

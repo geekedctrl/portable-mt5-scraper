@@ -59,6 +59,13 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(fetch.call_count, 1)
             self.assertEqual(fetch.call_args.args[3], 2)
 
+    def test_configured_timestamp_offset_is_applied_to_downloaded_history(self):
+        with closing(sqlite3.connect(':memory:')) as db, \
+                patch.dict('os.environ', {'MT5_TIME_OFFSET_SECONDS':'7200'}), \
+                patch.object(app, 'fetch', return_value=[bar(10000)]):
+            app.download(db, 'XAUUSD', 'M1', 10, max_bars=1)
+            self.assertEqual(db.execute('SELECT time FROM XAUUSD_M1').fetchone()[0], 2800)
+
     def test_errors_are_not_end_of_history(self):
         with patch.object(app.mt5, 'copy_rates_from', return_value=None), patch.object(app.mt5, 'last_error', return_value=(-10004, 'Disconnected')), patch.object(app.time, 'sleep'):
             with self.assertRaises(RuntimeError):
