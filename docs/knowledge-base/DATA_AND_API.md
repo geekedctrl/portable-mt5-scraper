@@ -2,25 +2,27 @@
 
 ## Instruments and intervals
 
-Default live FX subscriptions (20): EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD,
-AUDUSD, NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCHF, EURAUD, EURCAD, EURNZD,
-GBPCHF, GBPAUD, GBPCAD, GBPNZD, AUDCAD.
+Default live FX subscriptions (7): EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD,
+AUDUSD, NZDUSD.
 
-Current broker metals (14): XAUUSD, XAUEUR, XAUAUD, XAGUSD, XAGEUR, XPDUSD,
-XPTUSD, XAGAUD, XAUCHF, XAUGBP, ALUMINIUM, COPPER, LEAD, NICKEL.
+Default live metals (7): XAUUSD, XAUEUR, XAUAUD, XAGUSD, XAGEUR, XPDUSD,
+XPTUSD. Other broker-listed instruments can be added through `LIVE_SYMBOLS` as
+the supported universe grows.
 
 Discovery uses the broker's Forex/Metals instrument paths. Availability can vary
 by broker/account and a listing does not guarantee an actively updating market.
 `LIVE_SYMBOLS` overrides selection; unsupported names raise an error.
 
-Native candle intervals (21): M1, M2, M3, M4, M5, M6, M10, M12, M15, M20, M30,
-H1, H2, H3, H4, H6, H8, H12, D1, W1, MN1.
+Stored candle intervals (9): M1, M5, M15, M30, H1, H4, D1, W1, MN1. Dashboard
+and provider history presets are D5, 1M, 6M, YTD, 1Y, 5Y, and Max; these are
+date ranges, not candle intervals. The API backs them with stored intervals;
+W1 and MN1 support long-range views.
 The canonical map is in `src/xauusd_sqlite.py`; the frontend also has an ordering
 list. Keep both consistent when changing interval support.
 
-Historical batch defaults still select the original 7 FX + 3 metals, whereas
-live defaults select 34 instruments. Pass an explicit symbol list when backfilling
-the full live universe. Historical reset is destructive and is not routine startup.
+Historical and live defaults select the same seven FX pairs and seven metals.
+Pass an explicit symbol list when backfilling a larger universe. Historical reset
+is destructive and is not routine startup.
 
 ## Storage
 
@@ -84,10 +86,10 @@ Interactive Swagger UI is served at `/docs` and the OpenAPI 3.0 document at
 | `/provider/v1/quotes?symbols=EURUSD,GBPUSD` | One ordered result for every requested symbol; each is available with nested quote fields or unavailable with a reason |
 | `/provider/v1/history/EURUSD?interval=1m&limit=500&before=...` | Stored candles in chronological order, pagination, and stored coverage metadata |
 
-History intervals accept MT5 names (`M1`, `H1`, etc.) and consumer aliases such
-as `1m`, `1h`, and `1d`. Chart presets `1D`, `5D`, `1M`, `6M`, `YTD`, `1Y`,
-`3Y`, `5Y`, `10Y`, and `MAX` select a native stored timeframe and date window;
-they do not trigger broker downloads. Quotes are bounded to 100 symbols per
+History intervals accept the nine stored MT5 names and consumer aliases such
+as `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, and `1d`. Chart presets `D5`, `1M`,
+`6M`, `YTD`, `1Y`, `5Y`, and `MAX` select a native stored timeframe and date
+window; they do not trigger broker downloads. Quotes are bounded to 100 symbols per
 request. Quote results use `status=available|unavailable`; unavailable reasons are
 `not_subscribed`, `quote_not_received`, or `live_store_unavailable`. A present
 quote has `freshness=live|stale|warming|offline`, `quoteAgeAtApiMs` (time since
@@ -112,8 +114,9 @@ change before the Slate application consumes it. The gateway does not change
 Slate files or containers.
 
 History views use `/api/bars?table=XAUUSD_H1&range=MAX&limit=200`; allowed range
-values are `1Y`, `3Y`, `5Y`, `10Y`, and `MAX`. Year ranges use calendar subtraction
-from the latest stored candle, including leap-day handling. The service may choose
+values are `D5`, `1M`, `6M`, `YTD`, `1Y`, `5Y`, and `MAX`. Date ranges end at the
+latest stored candle; year and month subtraction handles calendar boundaries.
+The service may choose
 a different native interval to fit the requested extent. If necessary, it returns
 an OHLC overview with first open, highest high, lowest low, last close, summed
 volumes, and last spread per bucket. These are display aggregates, not new MT5
@@ -135,7 +138,7 @@ calendar months. Historical range views suppress forming labels.
 
 Broker timestamps were observed about two hours ahead of collector wall time
 when interpreted as Unix time. `MT5_TIME_OFFSET_SECONDS` optionally subtracts a
-verified broker offset from newly stored live ticks and candles; its default is
-zero. Existing rows are not rewritten. Verify the broker convention and session
-boundaries before enabling it or making latency claims. Also distinguish
-current-bar updates from completed candle closes.
+verified broker offset from newly stored live ticks, live candles, and historical
+backfill rows; its default is zero. Existing rows are not rewritten. Verify the
+broker convention and session boundaries before enabling it or making latency
+claims. Also distinguish current-bar updates from completed candle closes.

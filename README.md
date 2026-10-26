@@ -52,7 +52,7 @@ Open http://127.0.0.1:8080 to browse the live SQLite data:
 
 - Select an instrument and timeframe, and inspect OHLC candles and tick volume.
 - Apply UTC date filters, move through older/newer candles, or return to latest.
-- Use 1Y, 3Y, 5Y, 10Y, and Max history-range presets. They end at the latest
+- Use D5, 1M, 6M, YTD, 1Y, 5Y, and Max history-range presets. They end at the latest
   stored candle and automatically choose a suitable stored candle interval.
   Max spans the instrument's oldest available stored history. When necessary,
   a bounded OHLC overview combines first open, highest high, lowest low, last
@@ -123,17 +123,17 @@ the same capped container upserts current and newly completed candles into
 `/data/market.db`. Quote polling stays independent of candle loading. Both
 files are in the persistent data volume; the dashboard mounts it read-only.
 
-Default FX subscriptions: EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD,
-NZDUSD, EURGBP, EURJPY, GBPJPY, AUDJPY, EURCHF, EURAUD, EURCAD, EURNZD,
-GBPCHF, GBPAUD, GBPCAD, GBPNZD, AUDCAD. The collector also selects up to 20
-broker-listed metals; this account offers only 14, and all 14 are subscribed.
-Industrial metals are included. A listing does not guarantee an active feed.
+Default FX subscriptions: EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD, AUDUSD, and
+NZDUSD. Default metals: XAUUSD, XAUEUR, XAUAUD, XAGUSD, XAGEUR, XPDUSD, and
+XPTUSD. A listing does not guarantee an active feed.
 Set comma-separated `LIVE_SYMBOLS` to override subscriptions, then recreate.
 Unavailable subscriptions fail validation rather than substituting prices.
 
-All 21 candle timeframes are enabled, named `SYMBOL_TIMEFRAME`: M1, M2, M3,
-M4, M5, M6, M10, M12, M15, M20, M30, H1, H2, H3, H4, H6, H8, H12, D1, W1, MN1.
-Across 34 instruments this produces 714 tables. Monthly catch-up uses calendar
+The live collector stores M1, M5, M15, M30, H1, H4, D1, W1, and MN1 candles,
+named `SYMBOL_TIMEFRAME`. Across the 14 default instruments this produces 126 tables.
+Chart ranges such as D5, 1M, 6M, YTD, 1Y, 5Y, and Max are API range presets,
+not candle intervals. Weekly and monthly candles back the longer 5Y and Max
+views. Monthly catch-up uses calendar
 months rather than a fixed 30-day approximation.
 Existing history is preserved. New tables start with the latest two candles, then gradually seed up to
 200 recent bars. Seed progress survives restarts.

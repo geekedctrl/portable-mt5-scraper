@@ -17,18 +17,18 @@ from urllib.parse import parse_qs, urlsplit
 DATABASE = Path(os.environ.get('DATABASE_PATH', '/data/market.db'))
 STATIC = Path(__file__).with_name('static')
 LIVE_DATABASE = Path(os.environ.get('LIVE_DATABASE_PATH', str(DATABASE.with_name('live.db'))))
+CANDLE_WORKER_STALE_SECONDS = 180
 COLUMNS = ('time', 'open', 'high', 'low', 'close', 'tick_volume', 'spread', 'real_volume')
-FRAME_SECONDS = {**{f'M{n}': n*60 for n in (1,2,3,4,5,6,10,12,15,20,30)},
-                 **{f'H{n}': n*3600 for n in (1,2,3,4,6,8,12)},
+FRAME_SECONDS = {**{f'M{n}': n*60 for n in (1,5,15,30)},
+                 **{f'H{n}': n*3600 for n in (1,4)},
                  'D1':86400, 'W1':604800, 'MN1':2592000}
 FRAME_ALIASES = {
-    '1m':'M1','2m':'M2','3m':'M3','4m':'M4','5m':'M5','6m':'M6',
-    '10m':'M10','12m':'M12','15m':'M15','20m':'M20','30m':'M30',
-    '1h':'H1','2h':'H2','3h':'H3','4h':'H4','6h':'H6','8h':'H8','12h':'H12',
+    '1m':'M1','5m':'M5','15m':'M15','30m':'M30',
+    '1h':'H1','4h':'H4',
     '1d':'D1','1w':'W1','1mo':'MN1',
 }
-SLATE_RANGE_FRAME = {'1D':'M1','5D':'M15','1M':'M30','6M':'D1','YTD':'D1',
-                     '1Y':'D1','3Y':'W1','5Y':'W1','10Y':'MN1','MAX':'MN1'}
+SLATE_RANGE_FRAME = {'D5':'M15','1M':'M30','6M':'D1','YTD':'D1',
+                     '1Y':'D1','5Y':'W1','MAX':'MN1'}
 DASHBOARD_USER = os.environ.get('DASHBOARD_USER', '')
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
 
@@ -88,6 +88,10 @@ def provider_status():
             db.execute('PRAGMA query_only=ON')
             worker=db.execute('SELECT updated_at,failed_count FROM candle_health WHERE id=1').fetchone()
             candle_worker=dict(worker) if worker else None
+            if candle_worker:
+                progress_age=max(0,now-float(candle_worker['updated_at'] or 0))
+                candle_worker['progress_age_seconds']=round(progress_age,1)
+                candle_worker['progress_fresh']=progress_age<=CANDLE_WORKER_STALE_SECONDS
             latest={row['symbol']:dict(row) for row in db.execute('SELECT symbol,changed_at,tick_time_msc,seen_change FROM latest_quotes')}
             for instrument in db.execute('SELECT symbol FROM instruments'):
                 row=latest.get(instrument['symbol'])
@@ -104,8 +108,9 @@ def provider_status():
                 quote_counts[freshness]+=1
     checks=dict(live_database_available=LIVE_DATABASE.is_file(),market_database_available=market_available,
                 collector_online=bool(collector and collector.get('online')),
-                candle_worker_available=candle_worker is not None,
-                candle_worker_healthy=bool(candle_worker is not None and candle_worker.get('failed_count',0)==0))
+                candle_worker_available=bool(candle_worker and candle_worker.get('progress_fresh')),
+                candle_worker_healthy=bool(candle_worker and candle_worker.get('progress_fresh')
+                                           and candle_worker.get('failed_count')==0))
     ready=all(checks.values())
     return dict(provider='mt5-market-gateway',api_version='v1',status='ok' if ready else 'degraded',ready=ready,
                 checks=checks,collector=collector,candle_worker=candle_worker,quote_counts=quote_counts,
@@ -210,7 +215,9 @@ def provider_history(symbol, query):
             latest=db.execute(f'SELECT MAX(time) FROM "{table}" WHERE symbol=? AND timeframe=?',(symbol,frame)).fetchone()[0]
             if latest is not None and period!='MAX':
                 end=datetime.fromtimestamp(latest,timezone.utc)
-                if period.endswith('D'):
+                if period == 'D5':
+                    start=end-timedelta(days=5)
+                elif period.endswith('D'):
                     start=end-timedelta(days=int(period[:-1]))
                 elif period=='YTD':
                     start=datetime(end.year,1,1,tzinfo=timezone.utc)
@@ -304,7 +311,8 @@ def load_bars(connection, query):
 
 def load_range(connection, symbol, period, limit):
     """Cover the requested span using stored candles and bounded OHLC summaries."""
-    if period not in ('1Y','3Y','5Y','10Y','MAX'):
+    period=period.upper()
+    if period not in ('D5','1M','6M','YTD','1Y','5Y','MAX'):
         raise ValueError('Unsupported history range')
     candidates=[t for t in table_list(connection) if t['symbol']==symbol and t['first'] is not None]
     if not candidates:
@@ -316,8 +324,20 @@ def load_range(connection, symbol, period, limit):
         requested_start=oldest
     else:
         anchor=datetime.fromtimestamp(end,timezone.utc)
-        year=anchor.year-int(period[:-1])
-        requested_start=int(anchor.replace(year=year,day=min(anchor.day,calendar.monthrange(year,anchor.month)[1])).timestamp())
+        if period=='D5':
+            requested_start=int((anchor-timedelta(days=5)).timestamp())
+        elif period=='YTD':
+            requested_start=int(datetime(anchor.year,1,1,tzinfo=timezone.utc).timestamp())
+        elif period in ('1M','6M'):
+            months=1 if period=='1M' else 6
+            month_index=anchor.year*12+anchor.month-1-months
+            year,month=divmod(month_index,12)
+            month+=1
+            requested_start=int(anchor.replace(year=year,month=month,day=min(anchor.day,calendar.monthrange(year,month)[1])).timestamp())
+        else:
+            years=1 if period=='1Y' else 5
+            year=anchor.year-years
+            requested_start=int(anchor.replace(year=year,day=min(anchor.day,calendar.monthrange(year,anchor.month)[1])).timestamp())
     start=max(oldest,requested_start)
     covering=[t for t in candidates if t['first']<=start]
     fitting=[t for t in covering if (end-start)/FRAME_SECONDS.get(t['timeframe'],60)<=limit]

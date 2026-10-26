@@ -13,10 +13,12 @@ is currently set to 0.5 seconds for a measured comparison.
 
 The product is called the **gateway**. It must travel to a Linux server with MT5
 inside the image, Python collection, persistent SQLite storage, and a web dashboard.
-The user accepted 20 FX instruments plus all 14 metals available from this broker,
-all 21 native MT5 intervals, and 1Y/3Y/5Y/10Y/Max history views. Those views have
-already been implemented; they do not create yearly MT5 candle intervals.
-Resource limits matter because unconstrained MT5 previously overwhelmed the laptop.
+The current default is seven FX pairs (EURUSD, GBPUSD, USDJPY, USDCHF, USDCAD,
+AUDUSD, NZDUSD) plus seven broker-listed metals (XAUUSD, XAUEUR, XAUAUD, XAGUSD,
+XAGEUR, XPDUSD, XPTUSD). The user plans to expand the universe gradually. The nine
+chart-backed MT5 intervals and D5/1M/6M/YTD/1Y/5Y/Max history views remain; views do
+not create yearly MT5 candle intervals. Resource limits matter because
+unconstrained MT5 previously overwhelmed the laptop.
 Credentials come from the local `.env`; never copy them into documentation.
 
 ## First checks
@@ -33,9 +35,12 @@ python -m unittest discover -s tests -v
 ```
 
 Inspect `/api/tables` for coverage and `/api/live?symbol=EURUSD` for collector
-health. A healthy HTTP server does not prove MT5 is connected. At handoff, these
-checks showed 714 populated tables, an online collector, and 39 passing tests.
-Do not assume every populated table has complete historical coverage.
+health. A healthy HTTP server does not prove MT5 is connected. The experimental
+parallel history workers were stopped and removed; their database volumes were
+deleted, and their MT5 state volumes were preserved. The Gateway core and
+dashboard were stopped during that work and must be recreated after deployment.
+Slate containers were not changed. Verify the 14 default subscriptions, resource
+caps, live health, and storage after the Gateway services start.
 
 ## Preserve these boundaries
 
@@ -57,17 +62,20 @@ These are follow-up candidates, not claims that the stack is production-certifie
    Local Docker builds and the broker-connected local stack do not verify that host.
 2. Add a controlled historical backfill workflow. Live catch-up remains bounded
    and does not launch a historical job automatically.
-3. Verify the broker's timestamp convention and exact offset, including session
-   boundaries. `MT5_TIME_OFFSET_SECONDS` defaults to zero and affects new live
-   data only; existing rows are not rewritten.
+3. Recheck the broker timestamp offset across seasonal clock changes and session
+   boundaries. On the Slate VM, live ticks were about 7,200 seconds ahead of UTC
+   on 26 October 2026; its private `.env` now sets
+   `MT5_TIME_OFFSET_SECONDS=7200`. This adjusts newly collected data only;
+   existing candle rows are preserved and are not rewritten.
 4. Reconcile legacy `setup.py` dependencies with Docker: legacy NumPy 1.24.0 versus
    tested Wine runtime NumPy 1.26.4. Editable installation is not the deployment path.
 5. Pin build dependencies more tightly. Dashboard Basic auth is optional through
    `DASHBOARD_USER` and `DASHBOARD_PASSWORD`; keep remote access behind HTTPS/SSH.
 
-Worker supervision, bounded signal shutdown, and live coverage/gap reporting are
-implemented. Their behavior has local unit and container checks, but shutdown
-under every failure mode is not production-certified.
+Worker supervision now restarts both exited and stalled candle workers using
+progress heartbeats, with bounded backoff. Dashboard health reports stale
+worker progress. These behaviors have local unit coverage, but shutdown and
+restart under every failure mode are not production-certified.
 
 ## Validation expectations
 

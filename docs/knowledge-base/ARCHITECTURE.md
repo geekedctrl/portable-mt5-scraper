@@ -70,10 +70,14 @@ can resume this work. Outage catch-up is limited by `LIVE_MAX_BARS`;
 calendar months rather than a fixed 30-day approximation.
 
 The quote process supervises the candle worker and restarts it with bounded
-exponential backoff. SIGTERM/SIGINT trigger worker termination, SQLite close,
-and MT5 shutdown. Per-series bounds, recent bar count and detected gaps (bounded
-to the last 10,000 bars), and unavailable refresh count are refreshed in
-`candle_status`. `MT5_TIME_OFFSET_SECONDS` can subtract a
+exponential backoff if it exits or makes no progress for
+`LIVE_WORKER_STALL_SECONDS` (default 180 seconds). The worker updates its
+heartbeat after each instrument so a blocked MT5 history request can be
+detected. Dashboard health also marks progress older than 180 seconds stale.
+SIGTERM/SIGINT trigger worker termination, SQLite close, and MT5 shutdown.
+Per-series bounds, recent bar count and detected gaps (bounded to the last
+10,000 bars), and unavailable refresh count are refreshed in `candle_status`.
+`MT5_TIME_OFFSET_SECONDS` can subtract a
 verified broker timestamp offset from newly stored quote/candle times; default
 is zero and existing rows are unchanged.
 

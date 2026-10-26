@@ -21,9 +21,10 @@ def bar(t,close=1.5):
 
 
 class LiveCollectorTests(unittest.TestCase):
-    def test_all_twenty_one_timeframes_are_enabled(self):
-        self.assertEqual(len(app.FRAMES),21)
-        self.assertEqual(set(app.FRAMES),set(app.TIMEFRAMES))
+    def test_only_chart_backing_timeframes_are_enabled_by_default(self):
+        expected={'M1','M5','M15','M30','H1','H4','D1','W1','MN1'}
+        self.assertEqual(set(app.FRAMES),expected)
+        self.assertEqual(set(app.TIMEFRAMES),expected)
 
     def test_monthly_catchup_uses_calendar_months(self):
         from datetime import datetime,timezone
@@ -47,11 +48,12 @@ class LiveCollectorTests(unittest.TestCase):
             self.assertEqual(errors,0)
             copy.assert_not_called()
 
-    def test_twenty_fx_and_all_fourteen_metals(self):
-        symbols=[instrument(n,'Forex') for n in app.FX_DEFAULTS]+[instrument('METAL'+str(i),'Metals') for i in range(14)]
+    def test_seven_default_fx_and_seven_default_metals(self):
+        symbols=[instrument(n,'Forex') for n in app.FX_DEFAULTS]+[instrument(n,'Metals') for n in app.METAL_DEFAULTS]
         chosen=app.choose_symbols(symbols)
-        self.assertEqual(sum(c=='fx' for _,c in chosen),20)
-        self.assertEqual(sum(c=='metal' for _,c in chosen),14)
+        self.assertEqual(sum(c=='fx' for _,c in chosen),7)
+        self.assertEqual(sum(c=='metal' for _,c in chosen),7)
+        self.assertEqual([s.name for s,_ in chosen],app.FX_DEFAULTS+app.METAL_DEFAULTS)
 
     def test_unknown_subscription_rejected(self):
         with self.assertRaises(ValueError): app.choose_symbols([instrument('EURUSD','Forex')],'NOTREAL')
@@ -118,6 +120,19 @@ class LiveCollectorTests(unittest.TestCase):
     def test_worker_backoff_is_bounded(self):
         self.assertEqual([app.backoff_seconds(n) for n in (1,2,3,4,5,20)],[2,4,8,16,30,30])
 
+    def test_worker_watchdog_uses_start_time_when_database_heartbeat_is_old(self):
+        self.assertFalse(app.worker_stalled(10,100,200,180))
+        self.assertTrue(app.worker_stalled(10,100,281,180))
+        self.assertFalse(app.worker_stalled(250,100,300,180))
+
+    def test_candle_progress_refresh_preserves_last_completed_error_count(self):
+        with closing(sqlite3.connect(':memory:')) as db:
+            app.create_live_schema(db)
+            db.execute('INSERT INTO candle_health VALUES (1,50,1)')
+            with patch.object(app.time,'time',return_value=100):
+                app.record_candle_progress(db)
+            self.assertEqual(db.execute('SELECT updated_at,failed_count FROM candle_health').fetchone(),(100,1))
+
     def test_invalid_quotes_are_not_written(self):
         self.assertIsNone(app.quote_values('EURUSD',None,.01,None,1))
         self.assertIsNone(app.quote_values('EURUSD',NS(bid=2,ask=1),.01,None,1))
@@ -144,7 +159,7 @@ class LiveCollectorTests(unittest.TestCase):
                 app.run(max_cycles=1)
             with closing(sqlite3.connect(env['LIVE_DB'])) as db:
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM latest_quotes').fetchone()[0],2)
-                self.assertEqual(db.execute('SELECT COUNT(*) FROM candle_status').fetchone()[0],42)
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM candle_status').fetchone()[0],18)
                 self.assertEqual(db.execute('SELECT connected FROM collector_status').fetchone()[0],0)
                 metrics=db.execute('SELECT cycle_duration_ms,mt5_poll_ms,sqlite_write_ms,poll_overruns FROM collector_status').fetchone()
                 self.assertTrue(all(value is not None for value in metrics[:3]))

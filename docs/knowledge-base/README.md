@@ -26,19 +26,20 @@ Checked on **26 October 2026**, using the user's Asia/Kuala_Lumpur date:
 | --- | --- |
 | Project directory | `C:\Users\pkart\OneDrive\Desktop\Projects\MT5Scraper` |
 | Compose project | `mt5scraper-portable` |
+| Deployment | DietPi Linux VM at `slate-vm` |
 | Core container / service | `mt5-market-scraper` / `mt5` |
 | Dashboard container / service | `mt5-data-dashboard` / `dashboard` |
-| Subscriptions | 20 FX + 14 broker-listed metals |
-| Candle coverage | 34 symbols x 21 intervals = 714 populated tables |
-| Collector | Online; sampled EURUSD quote marked live |
-| Tests | 39 passing |
-| Dashboard | `http://127.0.0.1:8080/` |
+| Subscriptions | Seven FX pairs + seven broker-listed metals |
+| Candle coverage | Experimental worker databases deleted; Gateway database was empty before live service restart |
+| Collector | Parallel history workers removed; Gateway core/dashboard awaiting deployment with 14 default subscriptions |
+| Tests | 55 passing |
+| Dashboard | Stopped during backfill; watcher will restore after a successful merge |
 | MT5 browser desktop | `http://127.0.0.1:6080/vnc.html` |
 | Git baseline | `75f634e`, with significant uncommitted/untracked changes |
 
 This is a dated snapshot, not continuous monitoring. Recheck runtime state before
-acting. Local deployment has been exercised; deployment on the actual Linux
-server has not been verified.
+acting. Linux deployment, image transfer, two-terminal login, bounded batch-size
+benchmarking, and a parallel historical collection experiment have been exercised on DietPi.
 
 ## Product boundaries
 
@@ -47,8 +48,8 @@ server has not been verified.
 - SQLite is embedded, not a separate database-server container.
 - Only the latest quote per symbol is stored; there is no complete tick archive.
 - Live mode progressively seeds recent candles and performs bounded catch-up.
-  It does not promise complete broker history for all 714 tables.
-- 1Y/3Y/5Y/10Y/Max are views of stored history, not MT5 candle intervals or
+  It does not promise complete broker history for all 126 default tables.
+- D5/1M/6M/YTD/1Y/5Y/Max are views of stored history, not MT5 candle intervals or
   requests to download missing history.
 - Dashboard and desktop bind to loopback. Dashboard Basic authentication is
   optional; remote access should use SSH forwarding or HTTPS through a proxy.

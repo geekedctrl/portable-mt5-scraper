@@ -76,6 +76,7 @@ Use the template for the complete current configuration and defaults.
 | `MT5_WAIT_SECONDS` | Startup connection wait, 600 seconds |
 | `LIVE_POLL_SECONDS` | Quote polling interval; default 1 second, minimum 0.5 second |
 | `LIVE_CANDLE_SECONDS` | Candle scheduling base, 5 seconds |
+| `LIVE_WORKER_STALL_SECONDS` | Restart the candle worker after this much time without progress; default 180 seconds |
 | `LIVE_MAX_BARS` | Terminal live cache/catch-up bound, 1000 |
 | `LIVE_SEED_BARS` | Progressive initial seed target, 200 |
 | `LIVE_SYMBOLS` | Optional comma-separated subscription override |
@@ -88,6 +89,13 @@ Memory plus swap is capped at the same value as memory. Keep these limits unless
 the user deliberately chooses a different budget. Check `.env.example` for exact
 variable spelling before editing; configuration can evolve.
 
+Slate's API container must be attached to the `slate-dev_internal` Docker
+network and configured with
+`MT5_GATEWAY_URL=http://mt5-market-provider:8080/provider/v1`. The Gateway
+dashboard publishes the `mt5-market-provider` network alias. Without the URL
+setting, Slate's `/api/fx-metals` endpoint returns HTTP 503 even when Gateway
+quotes are healthy. This setting belongs to Slate's API deployment.
+
 For lower collection work, `LIVE_SYMBOLS` can be set to a fixed comma-separated
 subset. This changes both quote and candle subscriptions and is applied at core
 startup; it is not a runtime-priority list. Compare the collector's
@@ -96,6 +104,12 @@ from `/api/live?symbol=EURUSD` before and after changing the polling interval.
 Quote API responses report `quoteAgeAtApiMs` since local receipt and
 `brokerTimestampSkewMs` separately because broker timestamps have previously
 appeared offset from the gateway clock.
+
+On the Slate VM, the observed tick offset was approximately +7,200 seconds on
+26 October 2026, so its private `.env` uses `MT5_TIME_OFFSET_SECONDS=7200`.
+This is a deployment-specific observed setting, not a portable default. It
+applies to newly collected ticks and candles; existing database rows are left
+unchanged. Recheck the offset when the broker changes its seasonal server time.
 
 `stack` runs historical collection then retains the terminal; `scrape` exits after
 history; `check` authenticates then exits; `desktop` runs the desktop. The helper
@@ -128,6 +142,6 @@ On Linux/amd64, load the image archive with `docker load -i mt5scraper-image.tar
 create the private `.env`, then start the exported Compose with project name
 `mt5scraper-portable`. Keep image tags consistent with export-script arguments and
 environment overrides. Fresh state still downloads Python packages and needs
-internet access to the package index and broker. Actual server deployment remains
-unverified. A source-only handoff ZIP lacks `.image/terminal64.exe` and cannot
+internet access to the package index and broker. The DietPi Linux VM deployment
+has been exercised. A source-only handoff ZIP lacks `.image/terminal64.exe` and cannot
 build the core until that build asset or a prebuilt image is supplied.

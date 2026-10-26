@@ -40,6 +40,11 @@ class DashboardTests(unittest.TestCase):
         with closing(sqlite3.connect(':memory:')) as db:
             db.row_factory=sqlite3.Row; populate(db)
             with self.assertRaises(ValueError): app.load_bars(db,{'table':['EURUSD_M1'],'range':['100Y']})
+            with self.assertRaises(ValueError): app.load_range(db,'EURUSD','3Y',200)
+
+    def test_slate_range_presets_are_supported(self):
+        self.assertEqual(set(app.SLATE_RANGE_FRAME),{'D5','1M','6M','YTD','1Y','5Y','MAX'})
+        self.assertEqual(app.SLATE_RANGE_FRAME['D5'],'M15')
 
     def test_year_range_handles_leap_day(self):
         from datetime import datetime,timezone
@@ -178,6 +183,21 @@ class ProviderApiTests(unittest.TestCase):
             self.assertEqual(status['quote_counts']['missing'],2)
             self.assertEqual(status['collector']['mt5_poll_ms'],12)
 
+    def test_provider_status_marks_stale_candle_progress_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market,live=self.make_databases(directory)
+            with closing(sqlite3.connect(live)) as db:
+                db.execute('UPDATE candle_health SET updated_at=?,failed_count=0 WHERE id=1',
+                           (app.time.time()-app.CANDLE_WORKER_STALE_SECONDS-1,))
+                db.commit()
+            with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
+                status=app.provider_status()
+            self.assertFalse(status['checks']['candle_worker_available'])
+            self.assertFalse(status['checks']['candle_worker_healthy'])
+            self.assertFalse(status['candle_worker']['progress_fresh'])
+            self.assertGreater(status['candle_worker']['progress_age_seconds'],
+                               app.CANDLE_WORKER_STALE_SECONDS)
+
     def test_provider_quotes_include_explicit_results_for_missing_symbols(self):
         with tempfile.TemporaryDirectory() as directory:
             market,live=self.make_databases(directory)
@@ -217,12 +237,23 @@ class ProviderApiTests(unittest.TestCase):
     def test_provider_range_uses_native_bars_and_rejects_invalid_queries(self):
         with tempfile.TemporaryDirectory() as directory:
             market,live=self.make_databases(directory)
+            with closing(sqlite3.connect(market)) as db:
+                db.execute('CREATE TABLE EURUSD_M15 (symbol TEXT,timeframe TEXT,time INTEGER,open REAL,high REAL,low REAL,close REAL,tick_volume INTEGER,spread INTEGER,real_volume INTEGER,PRIMARY KEY(symbol,timeframe,time))')
+                db.executemany('INSERT INTO EURUSD_M15 VALUES (?,?,?,?,?,?,?,?,?,?)', [('EURUSD','M15',t,1,2,.5,1.5,5,1,0) for t in [100,200,300,400]])
+                db.commit()
             with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
-                result=app.provider_history('EURUSD',{'range':['1D'],'limit':['10']})
+                result=app.provider_history('EURUSD',{'range':['D5'],'limit':['10']})
                 with self.assertRaises(ValueError):
                     app.provider_history('EURUSD',{'interval':['2y'],'limit':['10']})
-            self.assertEqual(result['timeframe'],'M1')
+                with self.assertRaises(ValueError):
+                    app.provider_history('EURUSD',{'range':['3Y'],'limit':['10']})
+            self.assertEqual(result['timeframe'],'M15')
             self.assertEqual(len(result['bars']),4)
+
+    def test_only_supported_native_intervals_are_accepted(self):
+        expected={'M1','M5','M15','M30','H1','H4','D1','W1','MN1'}
+        self.assertEqual(set(app.FRAME_SECONDS)|{'MN1'},expected)
+        self.assertNotIn('2m',app.FRAME_ALIASES)
 
 
 class DashboardAuthTests(unittest.TestCase):

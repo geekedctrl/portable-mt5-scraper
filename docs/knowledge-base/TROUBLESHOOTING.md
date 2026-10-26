@@ -43,7 +43,7 @@ Core caps are 4 CPU/4 GiB; dashboard caps are 0.25 CPU/256 MiB. Earlier uncapped
 usage exceeded 10 GiB. Inspect applied limits and Docker memory/OOM status before
 raising them. An OOM event can terminate a child while leaving the parent online.
 Live cache is 1000 bars; seeding grows progressively toward 200 per table. Initial
-population of 714 tables takes time. Catch-up is bounded and does not fill every
+population of 126 default tables takes time. Catch-up is bounded and does not fill every
 historical gap automatically.
 
 ## Slow dashboard / range queries

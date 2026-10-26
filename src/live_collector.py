@@ -13,9 +13,8 @@ import time
 import MetaTrader5 as mt5
 from xauusd_sqlite import TIMEFRAMES, create_schema, table_name
 
-FX_DEFAULTS = ['EURUSD','GBPUSD','USDJPY','USDCHF','USDCAD','AUDUSD','NZDUSD',
-               'EURGBP','EURJPY','GBPJPY','AUDJPY','EURCHF','EURAUD','EURCAD',
-               'EURNZD','GBPCHF','GBPAUD','GBPCAD','GBPNZD','AUDCAD']
+FX_DEFAULTS = ['EURUSD','GBPUSD','USDJPY','USDCHF','USDCAD','AUDUSD','NZDUSD']
+METAL_DEFAULTS = ['XAUUSD','XAUEUR','XAUAUD','XAGUSD','XAGEUR','XPDUSD','XPTUSD']
 FRAMES = list(TIMEFRAMES)
 SECONDS = {**{f'M{n}':n*60 for n in (1,2,3,4,5,6,10,12,15,20,30)},
            **{f'H{n}':n*3600 for n in (1,2,3,4,6,8,12)},'D1':86400,'W1':604800}
@@ -44,9 +43,8 @@ def choose_symbols(symbols, override=''):
         if missing:
             raise ValueError('Unsupported LIVE_SYMBOLS: ' + ', '.join(missing))
     else:
-        fx = [s for s in FX_DEFAULTS if s in {x.name for x in groups['fx']}]
-        fx += [s.name for s in sorted(groups['fx'],key=lambda s:s.name) if s.name not in fx]
-        names = fx[:20] + [s.name for s in groups['metal'][:20]]
+        available_names = set(available)
+        names = [s for s in FX_DEFAULTS + METAL_DEFAULTS if s in available_names]
     return [(available[name], 'fx' if available[name] in groups['fx'] else 'metal') for name in names]
 
 
@@ -160,6 +158,21 @@ def catchup_count(last, now, frame, seed, cap):
     return min(cap,requested), requested>cap
 
 
+def worker_stalled(last_progress, started_at, now, timeout):
+    """A worker is stalled only after no progress since its start or heartbeat."""
+    return now-max(started_at,last_progress or started_at)>=timeout
+
+
+def candle_worker_timeout_seconds():
+    return max(60.0,float(os.environ.get('LIVE_WORKER_STALL_SECONDS','180')))
+
+
+def record_candle_progress(live):
+    """Refresh the worker heartbeat without clearing the last completed pass result."""
+    live.execute('''INSERT INTO candle_health(id,updated_at,failed_count) VALUES (1,?,NULL)
+        ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at''',(time.time(),))
+
+
 def reconnect():
     mt5.shutdown()
     options=dict(portable=True,timeout=10000)
@@ -226,6 +239,7 @@ def refresh_candles(market, live, selected, last_bars, seed, cap, due=None, inte
                     next_count=min(cap,seed,depth*4)
                     bootstrap[key]=next_count
                     live.execute('INSERT OR REPLACE INTO seed_progress VALUES (?,?,?)',(*key,next_count))
+            record_candle_progress(live)
     updated=time.time()
     with live:
         live.execute('INSERT OR REPLACE INTO candle_health VALUES (1,?,?)',(updated,bar_errors))
@@ -241,6 +255,8 @@ def run_candle_worker():
     seed=min(cap,max(2,int(os.environ.get('LIVE_SEED_BARS','200'))))
     interval=max(2,float(os.environ.get('LIVE_CANDLE_SECONDS','5')))
     with closing(sqlite3.connect(os.environ.get('LIVE_DB',r'Z:\data\live.db'),timeout=5)) as live, closing(sqlite3.connect(os.environ.get('MARKET_DB',r'Z:\data\market.db'),timeout=5)) as market:
+        with live:
+            record_candle_progress(live)
         last_bars={}
         for instrument,_ in selected:
             mt5.symbol_select(instrument.name,True)
@@ -258,6 +274,8 @@ def run_candle_worker():
                             first_time=excluded.first_time,last_time=excluded.last_time,
                             bar_count=excluded.bar_count,gap_count=excluded.gap_count''',
                                      (instrument.name,frame,last,time.time(),first,last,count,gaps))
+            with live:
+                record_candle_progress(live)
         bootstrap={(r[0],r[1]):r[2] for r in live.execute('SELECT symbol,timeframe,next_count FROM seed_progress')}
         passes=0;due={}
         while True:
@@ -287,6 +305,11 @@ def stop_process(process, timeout=10):
 
 def backoff_seconds(restarts):
     return min(30, 2 ** min(max(1, int(restarts)), 5))
+
+
+def candle_worker_progress_time(live, started_at):
+    row=live.execute('SELECT updated_at FROM candle_health WHERE id=1').fetchone()
+    return max(started_at,float(row[0]) if row and row[0] is not None else started_at)
 
 
 def run(max_cycles=None):
@@ -336,6 +359,7 @@ def run(max_cycles=None):
         old_handlers={sig:signal.signal(sig,request_stop) for sig in (signal.SIGTERM,signal.SIGINT)}
         if max_cycles is None:
             worker=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--candle-worker'])
+        worker_started_at=time.time() if worker is not None else 0
         try:
             while not stopping:
                 started=time.monotonic(); now=time.time(); cycle+=1
@@ -381,16 +405,26 @@ def run(max_cycles=None):
                                   cycle_duration_ms,mt5_poll_ms,sqlite_write_ms,quote_age_max_ms,poll_overruns))
                 if max_cycles is not None and connected:
                     candle_updated,_=refresh_candles(market,live,selected,last_bars,seed,cap)
-                if worker is not None and worker.poll() is not None:
-                    exit_code=worker.returncode
+                worker_exit=worker is not None and worker.poll() is not None
+                worker_progress=candle_worker_progress_time(live,worker_started_at) if worker is not None else time.time()
+                stalled_for=time.time()-worker_progress
+                worker_stalled_now=(worker is not None and not worker_exit
+                                    and worker_stalled(worker_progress,worker_started_at,time.time(),
+                                                       candle_worker_timeout_seconds()))
+                if worker_exit or worker_stalled_now:
+                    exit_code=worker.returncode if worker_exit else None
                     worker_restarts+=1
-                    error=f'Candle worker exited ({exit_code}); restarting ({worker_restarts})'
+                    error=(f'Candle worker exited ({exit_code}); restarting ({worker_restarts})' if worker_exit
+                           else f'Candle worker made no progress for {stalled_for:.0f}s; restarting ({worker_restarts})')
                     print(error,flush=True)
+                    if worker_stalled_now:
+                        stop_process(worker,timeout=5)
                     with live:
                         live.execute('UPDATE collector_status SET last_error=?,worker_restarts=? WHERE id=1',(error,worker_restarts))
                     time.sleep(backoff_seconds(worker_restarts))
                     if not stopping:
                         worker=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--candle-worker'])
+                        worker_started_at=time.time()
                 if cycle==1 or cycle%30==0:
                     print(f'Live collector cycle {cycle}: connected={connected}, quoted={len(previous)}, instruments={len(selected)}',flush=True)
                 if max_cycles is not None and cycle >= max_cycles:

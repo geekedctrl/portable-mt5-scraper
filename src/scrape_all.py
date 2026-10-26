@@ -1,4 +1,4 @@
-"""Download all MT5 chart history for ten symbols into one SQLite database."""
+"""Download all MT5 chart history for the configured default symbols."""
 import argparse
 import json
 import os
@@ -11,8 +11,8 @@ from pathlib import Path
 import MetaTrader5 as mt5
 from xauusd_sqlite import TIMEFRAMES, create_schema, table_name
 
-SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'USDCAD', 'NZDUSD',
-           'XAUUSD', 'XAGUSD', 'XPTUSD']
+SYMBOLS = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCAD', 'AUDUSD', 'NZDUSD',
+           'XAUUSD', 'XAUEUR', 'XAUAUD', 'XAGUSD', 'XAGEUR', 'XPDUSD', 'XPTUSD']
 FRAMES = list(TIMEFRAMES)
 
 
