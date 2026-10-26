@@ -30,16 +30,19 @@ Checked on **26 October 2026**, using the user's Asia/Kuala_Lumpur date:
 | Core container / service | `mt5-market-scraper` / `mt5` |
 | Dashboard container / service | `mt5-data-dashboard` / `dashboard` |
 | Subscriptions | Seven FX pairs + seven broker-listed metals |
-| Candle coverage | Experimental worker databases deleted; Gateway database was empty before live service restart |
-| Collector | Parallel history workers removed; Gateway core/dashboard awaiting deployment with 14 default subscriptions |
+| Candle coverage | 126 default symbol/timeframe tables initialized in the Gateway database |
+| Collector | Live on 7 FX + 7 metals; provider reports 14/14 live quotes and a fresh candle-worker heartbeat |
+| Resource caps | Slate VM core 1 CPU / 4 GiB; dashboard 0.25 CPU / 256 MiB |
 | Tests | 55 passing |
-| Dashboard | Stopped during backfill; watcher will restore after a successful merge |
+| Dashboard | Healthy at `http://127.0.0.1:8080/`; published to Slate's internal Docker network |
 | MT5 browser desktop | `http://127.0.0.1:6080/vnc.html` |
-| Git baseline | `75f634e`, with significant uncommitted/untracked changes |
+| Git baseline | `b54dea4`, pushed to `geekedctrl/portable-mt5-scraper` |
 
 This is a dated snapshot, not continuous monitoring. Recheck runtime state before
 acting. Linux deployment, image transfer, two-terminal login, bounded batch-size
 benchmarking, and a parallel historical collection experiment have been exercised on DietPi.
+The experimental worker databases were deleted after stopping the workers; their
+MT5 state volumes were retained. The regular live service has since been redeployed.
 
 ## Product boundaries
 

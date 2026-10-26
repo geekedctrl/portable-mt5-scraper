@@ -38,16 +38,18 @@ Inspect `/api/tables` for coverage and `/api/live?symbol=EURUSD` for collector
 health. A healthy HTTP server does not prove MT5 is connected. The experimental
 parallel history workers were stopped and removed; their database volumes were
 deleted, and their MT5 state volumes were preserved. The Gateway core and
-dashboard were stopped during that work and must be recreated after deployment.
-Slate containers were not changed. Verify the 14 default subscriptions, resource
-caps, live health, and storage after the Gateway services start.
+dashboard have been redeployed in live mode with the 14 default subscriptions.
+The provider reports 14 live quotes and a fresh candle-worker heartbeat. Slate
+containers were not changed. Recheck live health and storage before relying on
+the service.
 
 ## Preserve these boundaries
 
 - Ordinary upgrades retain both named volumes. Never use `down -v` or reset the
   database unless the user explicitly requests data removal.
-- Keep loopback web bindings and the current caps: core 4 CPU/4 GiB, dashboard
-  0.25 CPU/256 MiB, with no additional swap.
+- Keep loopback web bindings and the deployed Slate VM caps: core 1 CPU/4 GiB,
+  dashboard 0.25 CPU/256 MiB, with no additional swap. The portable example
+  defaults to 4 CPU/4 GiB; honor the private deployment `.env` values.
 - The unrelated `mt5-gateway`, Postgres, Redis, and `slate-*` containers are not
   owned by this Compose project. Do not prune Docker globally.
 - The stack is a market-data collector. Do not add order placement implicitly.
