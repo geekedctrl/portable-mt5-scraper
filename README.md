@@ -160,11 +160,14 @@ backoff. Live status includes stored bar counts, available time bounds, detected
 gaps within the most recent 10,000 bars, and whether catch-up reached its
 configured cap.
 
-To run the original full-history job instead, set `MT5_MODE=stack` in `.env`
-and recreate. It still uses the historical `MT5_MAX_BARS` limit (100,000,000
-by default), and reports coverage/integrity in `/data/market.report.json`.
-Set `MT5_MODE=live` and recreate to return to continuous updates. Long backfills
-may exceed the laptop's 4 GiB cap; run them separately with suitable resources.
+For a full-history scrape of the default seven FX pairs and seven metals, stop
+live collection and run `scripts/run-history-and-restore.sh` from the deployment
+copy in `/opt/mt5scraper-deploy`. It uses one MT5 terminal and the existing market
+database, keeps the dashboard available, stops before free disk falls below 15
+GiB, and restores live collection when the scrape ends. Results and integrity
+status are written to `/data/market.report.json`; progress is in the container
+logs. The terminal history limit is controlled by `MT5_MAX_BARS` (default
+100,000,000). Long backfills may take hours; keep the configured memory cap.
 
 The scraper retries temporarily stale pages. When MT5 repeats its earliest
 candle, three connected one-bar probes confirm the boundary. Other paging or

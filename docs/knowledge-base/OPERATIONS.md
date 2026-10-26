@@ -66,6 +66,16 @@ contain a terminal updated by MT5 itself.
 
 ## Configuration
 
+### Backfill the default 14 instruments
+
+Copy `scripts/run-history-and-restore.sh` to `/opt/mt5scraper-deploy` and run it
+from the VM. It uses one terminal and the primary market database, keeps the
+read-only dashboard online, monitors the 15 GiB disk floor, and recreates the
+core in live mode after successful completion, failure, or a disk-floor stop.
+The current defaults are seven FX pairs and seven metals across all nine stored
+intervals. The historical scraper applies `MT5_TIME_OFFSET_SECONDS` to stored
+candle timestamps, matching the live collector.
+
 Copy `.env.example` to `.env` privately and set all three authentication variables:
 `MT5_LOGIN`, `MT5_PASSWORD`, and exact broker `MT5_SERVER`. Do not print `.env`.
 Use the template for the complete current configuration and defaults.

@@ -11,6 +11,7 @@ docker save --output (Join-Path $OutputDirectory 'mt5scraper-image.tar') $Image 
 if ($LASTEXITCODE -ne 0) { throw 'Image export failed.' }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docker/compose.server.yaml') -Destination (Join-Path $OutputDirectory 'compose.yaml') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docker/compose.slate-local.yaml') -Destination (Join-Path $OutputDirectory 'compose.slate-local.yaml') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts/run-history-and-restore.sh') -Destination (Join-Path $OutputDirectory 'run-history-and-restore.sh') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot '.env.example') -Destination (Join-Path $OutputDirectory '.env.example') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination (Join-Path $OutputDirectory 'README.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/knowledge-base/DIETPI_DEPLOYMENT.md') -Destination (Join-Path $OutputDirectory 'DEPLOY_TO_DIETPI.md') -Force
