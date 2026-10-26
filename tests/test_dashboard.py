@@ -105,7 +105,7 @@ class LiveDashboardTests(unittest.TestCase):
                 live_collector.create_live_schema(db)
                 db.execute("INSERT INTO instruments VALUES ('EURUSD','fx','Euro',5,.00001,1)")
                 db.execute("INSERT INTO latest_quotes VALUES ('EURUSD',1,1.1,.1,10000,?,?,?,?)",(int(now*1000),now,now-60,1))
-                db.execute('INSERT INTO collector_status VALUES (1,?,?,?,?,?,?,?,0)',(now,1,2,5,1,None,now))
+                db.execute('INSERT INTO collector_status(id,heartbeat,connected,quote_interval,candle_interval,cycle,last_error,candle_updated_at,worker_restarts) VALUES (1,?,?,?,?,?,?,?,0)',(now,1,2,5,1,None,now))
                 db.commit()
                 with patch.object(app,'LIVE_DATABASE',path):
                     self.assertEqual(app.live_snapshot('EURUSD')['quote']['status'],'stale')
@@ -122,6 +122,107 @@ class LiveDashboardTests(unittest.TestCase):
             with patch.object(app,'LIVE_DATABASE',path):
                 self.assertIsNone(app.live_snapshot('EURUSD')['quote'])
             self.assertFalse(path.exists())
+
+
+class ProviderApiTests(unittest.TestCase):
+    def make_databases(self, directory):
+        market=Path(directory)/'market.db'
+        live=Path(directory)/'live.db'
+        with closing(sqlite3.connect(market)) as db: populate(db)
+        now=app.time.time()
+        with closing(sqlite3.connect(live)) as db:
+            db.executescript('''
+                CREATE TABLE instruments(symbol TEXT,asset_class TEXT,description TEXT,digits INTEGER,point REAL,available INTEGER);
+                CREATE TABLE latest_quotes(symbol TEXT,bid REAL,ask REAL,spread REAL,spread_points REAL,tick_time_msc INTEGER,received_at REAL,changed_at REAL,seen_change INTEGER);
+                CREATE TABLE collector_status(id INTEGER,heartbeat REAL,connected INTEGER,quote_interval REAL,candle_interval REAL,cycle INTEGER,last_error TEXT,candle_updated_at REAL,worker_restarts INTEGER,cycle_duration_ms REAL,mt5_poll_ms REAL,sqlite_write_ms REAL,quote_age_max_ms REAL,poll_overruns INTEGER);
+                CREATE TABLE candle_status(symbol TEXT,timeframe TEXT,current_open INTEGER,updated_at REAL,catchup_limited INTEGER,first_time INTEGER,last_time INTEGER,bar_count INTEGER,gap_count INTEGER,unavailable INTEGER,PRIMARY KEY(symbol,timeframe));
+                CREATE TABLE candle_health(id INTEGER,updated_at REAL,failed_count INTEGER);
+            ''')
+            db.execute("INSERT INTO instruments VALUES ('EURUSD','fx','Euro / US Dollar',5,.00001,1)")
+            db.execute("INSERT INTO instruments VALUES ('GBPUSD','fx','Pound Sterling / US Dollar',5,.00001,1)")
+            db.execute("INSERT INTO instruments VALUES ('XAUUSD','metal','Gold / US Dollar',2,.01,1)")
+            db.execute('INSERT INTO latest_quotes VALUES (?,?,?,?,?,?,?,?,?)',
+                       ('EURUSD',1.1,1.1002,.0002,20,int(now*1000),now,now,1))
+            db.execute('INSERT INTO collector_status VALUES (1,?,1,1,5,12,NULL,?,0,40,12,20,30,0)',(now,now))
+            db.execute("INSERT INTO candle_status VALUES ('EURUSD','M1',400,?,1,100,400,4,2,0)",(now,))
+            db.execute('INSERT INTO candle_health VALUES (1,?,0)',(now,))
+            db.commit()
+        return market,live
+
+    def test_provider_quote_matches_normalized_consumer_shape_and_freshness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market,live=self.make_databases(directory)
+            with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
+                result=app.provider_quotes(['eurusd'])
+            self.assertEqual(result['provider'],'mt5-market-gateway')
+            entry=result['quotes'][0]
+            self.assertEqual(entry['status'],'available')
+            quote=entry['quote']
+            self.assertEqual(quote['symbol'],'EURUSD')
+            self.assertAlmostEqual(quote['price'],1.1001)
+            self.assertEqual((quote['bid'],quote['ask'],quote['source'],quote['freshness']),
+                             (1.1,1.1002,'mt5','live'))
+            self.assertIn('sourceTimestamp',quote)
+            self.assertGreaterEqual(quote['quoteAgeAtApiMs'],0)
+            self.assertIn('brokerTimestampSkewMs',quote)
+
+    def test_provider_status_reports_readiness_and_quote_health_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market,live=self.make_databases(directory)
+            with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
+                status=app.provider_status()
+            self.assertTrue(status['ready'])
+            self.assertEqual(status['status'],'ok')
+            self.assertTrue(status['checks']['collector_online'])
+            self.assertEqual(status['quote_counts']['live'],1)
+            self.assertEqual(status['quote_counts']['missing'],2)
+            self.assertEqual(status['collector']['mt5_poll_ms'],12)
+
+    def test_provider_quotes_include_explicit_results_for_missing_symbols(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market,live=self.make_databases(directory)
+            with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
+                result=app.provider_quotes(['EURUSD','GBPUSD','UNKNOWN'])
+            self.assertEqual([item['symbol'] for item in result['quotes']],['EURUSD','GBPUSD','UNKNOWN'])
+            self.assertEqual([item['status'] for item in result['quotes']],['available','unavailable','unavailable'])
+            self.assertEqual(result['quotes'][1]['reason'],'quote_not_received')
+            self.assertEqual(result['quotes'][2]['reason'],'not_subscribed')
+
+    def test_provider_instruments_can_filter_asset_class_and_search(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _,live=self.make_databases(directory)
+            with patch.object(app,'LIVE_DATABASE',live):
+                fx=app.provider_instruments(asset_class='fx')
+                metal=app.provider_instruments(asset_class='metal',search='gold')
+                with self.assertRaises(ValueError):
+                    app.provider_instruments(asset_class='crypto')
+                with self.assertRaises(ValueError):
+                    app.provider_instruments(search='x'*101)
+            self.assertEqual([row['symbol'] for row in fx['instruments']],['EURUSD','GBPUSD'])
+            self.assertIs(fx['instruments'][0]['available'],True)
+            self.assertEqual([row['symbol'] for row in metal['instruments']],['XAUUSD'])
+
+    def test_provider_history_supports_slate_intervals_and_paging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market,live=self.make_databases(directory)
+            with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
+                result=app.provider_history('EURUSD',{'interval':['1m'],'limit':['2']})
+            self.assertEqual(result['timeframe'],'M1')
+            self.assertEqual([bar['time'] for bar in result['bars']],[300,400])
+            self.assertTrue(result['hasOlder'])
+            self.assertEqual(result['nextBefore'],300)
+            self.assertEqual(result['bars'][0]['volume'],5)
+            self.assertEqual(result['coverage'],dict(start=100,end=400,recentBarCount=4,catchupLimited=True,gapCount=2,unavailableRefreshes=0))
+
+    def test_provider_range_uses_native_bars_and_rejects_invalid_queries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market,live=self.make_databases(directory)
+            with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
+                result=app.provider_history('EURUSD',{'range':['1D'],'limit':['10']})
+                with self.assertRaises(ValueError):
+                    app.provider_history('EURUSD',{'interval':['2y'],'limit':['10']})
+            self.assertEqual(result['timeframe'],'M1')
+            self.assertEqual(len(result['bars']),4)
 
 
 class DashboardAuthTests(unittest.TestCase):

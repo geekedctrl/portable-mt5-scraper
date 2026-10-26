@@ -1,8 +1,13 @@
 # Coding-agent handoff
 
 Snapshot: 26 October 2026. Start with [README.md](README.md), then the runbook.
-The current requested work is this knowledge base; no new runtime feature is
-being implemented as part of the handoff.
+The local integration adds a read-only provider API for trusted Docker clients
+and an optional bridge to Slate's local Docker network. Slate's checkout and
+containers remain unchanged; Slate still needs a provider URL/configuration
+change before its quote worker will consume Gateway data. Swagger UI is served
+at `/docs`, with its OpenAPI specification at `/openapi.json`. Collector timing
+instrumentation and batched quote writes are implemented; the local poll interval
+is currently set to 0.5 seconds for a measured comparison.
 
 ## User intent and accepted decisions
 
@@ -66,8 +71,8 @@ under every failure mode is not production-certified.
 
 ## Validation expectations
 
-The 43 tests cover startup helpers, historical paging, collection logic, and
-dashboard queries. Much of MT5 behavior is mocked; passing tests do not replace
+The 50 tests cover startup helpers, historical paging, collection logic, and
+dashboard/provider API queries. Much of MT5 behavior is mocked; passing tests do not replace
 a broker-connected smoke check. Preserve regression coverage for earliest-candle
 paging, indexed SQLite queries, calendar ranges, and monthly forming-bar handling.
 Documentation-only changes do not require recreating containers.

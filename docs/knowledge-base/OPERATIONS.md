@@ -22,6 +22,30 @@ server, keep loopback bindings and forward ports over SSH, for example
 Optional dashboard Basic authentication uses `DASHBOARD_USER` and
 `DASHBOARD_PASSWORD` in the private `.env`; set both. Use HTTPS or SSH remotely.
 
+## Connect the local Slate stack
+
+The optional provider API is served by the dashboard at
+`http://mt5-market-provider:8080/provider/v1` from containers attached to the
+same Docker network. Slate's current local network is `slate-local_internal`;
+set `SLATE_DOCKER_NETWORK` in `.env` if its name differs. Apply the overlay to
+the dashboard service only:
+
+```powershell
+docker compose --project-directory . -p mt5scraper-portable -f docker/compose.server.yaml -f docker/compose.slate-local.yaml up -d --no-deps dashboard
+```
+
+This preserves the core collector and volumes. To exercise DNS and the HTTP
+contract from Slate's Node runtime without changing Slate files or containers:
+
+```powershell
+./scripts/test-slate-provider.ps1
+```
+
+The script starts a temporary Node container on the Slate network and removes it
+when the request checks finish. The API remains read-only and uses the dashboard's
+optional Basic authentication. Network attachment alone does not configure
+Slate's application to consume the provider.
+
 ## Build and apply changes
 
 ```powershell
@@ -50,7 +74,7 @@ Use the template for the complete current configuration and defaults.
 | --- | --- |
 | `MT5_MODE` | `live`; other modes are desktop, check, stack, scrape |
 | `MT5_WAIT_SECONDS` | Startup connection wait, 600 seconds |
-| `LIVE_POLL_SECONDS` | Quote polling, 1 second |
+| `LIVE_POLL_SECONDS` | Quote polling interval; default 1 second, minimum 0.5 second |
 | `LIVE_CANDLE_SECONDS` | Candle scheduling base, 5 seconds |
 | `LIVE_MAX_BARS` | Terminal live cache/catch-up bound, 1000 |
 | `LIVE_SEED_BARS` | Progressive initial seed target, 200 |
@@ -63,6 +87,15 @@ Use the template for the complete current configuration and defaults.
 Memory plus swap is capped at the same value as memory. Keep these limits unless
 the user deliberately chooses a different budget. Check `.env.example` for exact
 variable spelling before editing; configuration can evolve.
+
+For lower collection work, `LIVE_SYMBOLS` can be set to a fixed comma-separated
+subset. This changes both quote and candle subscriptions and is applied at core
+startup; it is not a runtime-priority list. Compare the collector's
+`cycle_duration_ms`, `mt5_poll_ms`, `sqlite_write_ms`, and `poll_overruns` fields
+from `/api/live?symbol=EURUSD` before and after changing the polling interval.
+Quote API responses report `quoteAgeAtApiMs` since local receipt and
+`brokerTimestampSkewMs` separately because broker timestamps have previously
+appeared offset from the gateway clock.
 
 `stack` runs historical collection then retains the terminal; `scrape` exits after
 history; `check` authenticates then exits; `desktop` runs the desktop. The helper
@@ -86,9 +119,10 @@ Do not copy an actively changing database file and assume a consistent snapshot.
 ## Export and Linux deployment
 
 `./scripts/export-stack.ps1` saves both images to `release/mt5scraper-image.tar`
-and copies server Compose as `compose.yaml`, `.env.example`, and the root README.
-It does not export credentials or database/state volumes. The export helper does
-not currently copy this knowledge base, so send the handoff bundle separately.
+and copies server Compose as `compose.yaml`, the optional Slate network overlay,
+`.env.example`, the root README, DietPi deployment steps, and an SHA-256 checksum.
+It does not export credentials or database/state volumes. The remaining knowledge
+base is not copied into the release folder.
 
 On Linux/amd64, load the image archive with `docker load -i mt5scraper-image.tar`,
 create the private `.env`, then start the exported Compose with project name

@@ -62,7 +62,9 @@ def create_live_schema(db):
         CREATE TABLE IF NOT EXISTS collector_status (
             id INTEGER PRIMARY KEY CHECK(id=1), heartbeat REAL NOT NULL, connected INTEGER NOT NULL,
             quote_interval REAL NOT NULL, candle_interval REAL NOT NULL, cycle INTEGER NOT NULL,
-            last_error TEXT, candle_updated_at REAL, worker_restarts INTEGER NOT NULL DEFAULT 0);
+            last_error TEXT, candle_updated_at REAL, worker_restarts INTEGER NOT NULL DEFAULT 0,
+            cycle_duration_ms REAL, mt5_poll_ms REAL, sqlite_write_ms REAL,
+            quote_age_max_ms REAL, poll_overruns INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS candle_status (
             symbol TEXT NOT NULL, timeframe TEXT NOT NULL, current_open INTEGER NOT NULL,
             updated_at REAL NOT NULL, catchup_limited INTEGER NOT NULL,
@@ -77,8 +79,11 @@ def create_live_schema(db):
         if name not in columns:
             db.execute(f'ALTER TABLE candle_status ADD COLUMN {name} {kind}')
     status_columns={row[1] for row in db.execute('PRAGMA table_info(collector_status)')}
-    if 'worker_restarts' not in status_columns:
-        db.execute('ALTER TABLE collector_status ADD COLUMN worker_restarts INTEGER NOT NULL DEFAULT 0')
+    for name,kind in (('worker_restarts','INTEGER NOT NULL DEFAULT 0'),('cycle_duration_ms','REAL'),
+                      ('mt5_poll_ms','REAL'),('sqlite_write_ms','REAL'),('quote_age_max_ms','REAL'),
+                      ('poll_overruns','INTEGER NOT NULL DEFAULT 0')):
+        if name not in status_columns:
+            db.execute(f'ALTER TABLE collector_status ADD COLUMN {name} {kind}')
     db.commit()
 
 
@@ -96,13 +101,14 @@ def quote_values(symbol, tick, point, previous, now, time_offset=0):
             round(spread/point,6) if point>0 else 0.0,stamp,now,changed_at,seen_change)
 
 
-def write_quote(db, values):
-    if values is not None:
-        db.execute('''INSERT INTO latest_quotes VALUES (?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(symbol) DO UPDATE SET bid=excluded.bid,ask=excluded.ask,
-            spread=excluded.spread,spread_points=excluded.spread_points,
-            tick_time_msc=excluded.tick_time_msc,received_at=excluded.received_at,
-            changed_at=excluded.changed_at,seen_change=excluded.seen_change''',values)
+def write_quotes(db, values):
+    """Batch latest-quote upserts after MT5 IPC calls have completed."""
+    db.executemany('''INSERT INTO latest_quotes VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(symbol) DO UPDATE SET bid=excluded.bid,ask=excluded.ask,
+        spread=excluded.spread,spread_points=excluded.spread_points,
+        tick_time_msc=excluded.tick_time_msc,received_at=excluded.received_at,
+        changed_at=excluded.changed_at,seen_change=excluded.seen_change''',
+        (row for row in values if row is not None))
 
 
 def write_bars(db, symbol, frame, rates, time_offset=0):
@@ -300,7 +306,9 @@ def run(max_cycles=None):
     with closing(sqlite3.connect(live_path,timeout=5)) as live, closing(sqlite3.connect(market_path,timeout=5)) as market:
         live.row_factory=sqlite3.Row
         create_live_schema(live)
-        worker_restarts=live.execute('SELECT COALESCE(MAX(worker_restarts),0) FROM collector_status').fetchone()[0]
+        status_row=live.execute('SELECT worker_restarts,poll_overruns FROM collector_status WHERE id=1').fetchone()
+        worker_restarts=status_row[0] if status_row else 0
+        poll_overruns=status_row[1] if status_row else 0
         last_bars={}
         with live:
             # Preserve quote history across restarts only for configured instruments.
@@ -337,26 +345,40 @@ def run(max_cycles=None):
                     reconnect()
                     info=mt5.terminal_info(); connected=bool(info and info.connected)
                 last_error=None
-                ticks={}
+                quote_values_to_write=[]
                 if connected:
+                    poll_started=time.monotonic()
+                    for instrument,_ in selected:
+                        tick=mt5.symbol_info_tick(instrument.name)
+                        values=quote_values(instrument.name,tick,instrument.point,previous.get(instrument.name),time.time(),broker_time_offset_seconds())
+                        if values is not None:
+                            quote_values_to_write.append(values)
+                    mt5_poll_ms=(time.monotonic()-poll_started)*1000
+                    write_started=time.monotonic()
                     with live:
-                        for instrument,_ in selected:
-                            tick=mt5.symbol_info_tick(instrument.name)
-                            ticks[instrument.name]=tick
-                            values=quote_values(instrument.name,tick,instrument.point,previous.get(instrument.name),time.time(),broker_time_offset_seconds())
-                            if values is not None:
-                                write_quote(live,values)
-                                previous[instrument.name]=dict(symbol=values[0],tick_time_msc=values[5],changed_at=values[7],seen_change=values[8])
+                        write_quotes(live,quote_values_to_write)
+                    sqlite_write_ms=(time.monotonic()-write_started)*1000
+                    for values in quote_values_to_write:
+                        previous[values[0]]=dict(symbol=values[0],tick_time_msc=values[5],changed_at=values[7],seen_change=values[8])
+                    quote_age_max_ms=max((time.time()-values[6])*1000 for values in quote_values_to_write) if quote_values_to_write else None
                 else:
                     last_error='MT5 disconnected; reconnecting'
+                    mt5_poll_ms=sqlite_write_ms=quote_age_max_ms=None
+                cycle_duration_ms=(time.monotonic()-started)*1000
+                if cycle_duration_ms>quote_interval*1000:
+                    poll_overruns+=1
                 with live:
                     live.execute('''INSERT INTO collector_status(
-                        id,heartbeat,connected,quote_interval,candle_interval,cycle,last_error,candle_updated_at
-                    ) VALUES (1,?,?,?,?,?,?,?)
+                        id,heartbeat,connected,quote_interval,candle_interval,cycle,last_error,candle_updated_at,
+                        cycle_duration_ms,mt5_poll_ms,sqlite_write_ms,quote_age_max_ms,poll_overruns
+                    ) VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(id) DO UPDATE SET heartbeat=excluded.heartbeat,connected=excluded.connected,
                         quote_interval=excluded.quote_interval,candle_interval=excluded.candle_interval,cycle=excluded.cycle,
-                        last_error=excluded.last_error''',
-                                 (time.time(),int(connected),quote_interval,candle_interval,cycle,last_error,candle_updated))
+                        last_error=excluded.last_error,cycle_duration_ms=excluded.cycle_duration_ms,
+                        mt5_poll_ms=excluded.mt5_poll_ms,sqlite_write_ms=excluded.sqlite_write_ms,
+                        quote_age_max_ms=excluded.quote_age_max_ms,poll_overruns=excluded.poll_overruns''',
+                                 (time.time(),int(connected),quote_interval,candle_interval,cycle,last_error,candle_updated,
+                                  cycle_duration_ms,mt5_poll_ms,sqlite_write_ms,quote_age_max_ms,poll_overruns))
                 if max_cycles is not None and connected:
                     candle_updated,_=refresh_candles(market,live,selected,last_bars,seed,cap)
                 if worker is not None and worker.poll() is not None:

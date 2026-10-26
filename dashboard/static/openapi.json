@@ -1,0 +1,761 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "MT5 Market Gateway API",
+    "version": "1.0.0",
+    "description": "Read-only market data API for trusted internal consumers. Quotes expose the latest polled MT5 quote; history returns candles already stored by the gateway. Requests never trigger broker downloads. Health includes collector timing measurements and per-quote age since local receipt, separated from broker timestamp skew.",
+    "contact": {
+      "name": "MT5 Market Gateway"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://mt5-market-provider:8080",
+      "description": "Docker internal network (local Slate bridge)"
+    },
+    {
+      "url": "http://127.0.0.1:8080",
+      "description": "Gateway host loopback"
+    }
+  ],
+  "security": [
+    {
+      "basicAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "Enabled when DASHBOARD_USER and DASHBOARD_PASSWORD are both configured."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "required": [
+          "provider",
+          "api_version",
+          "status",
+          "collector",
+          "market_database_available",
+          "instruments",
+          "server_time"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "example": "mt5-market-gateway"
+          },
+          "api_version": {
+            "type": "string",
+            "example": "v1"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "degraded"
+            ]
+          },
+          "collector": {
+            "type": "object",
+            "nullable": true,
+            "description": "Collector heartbeat, intervals, latest quote-cycle duration and stage timing, and worker restart count.",
+            "properties": {
+              "quote_interval": {
+                "type": "number",
+                "description": "Configured quote poll interval, seconds."
+              },
+              "cycle_duration_ms": {
+                "type": "number",
+                "nullable": true,
+                "description": "Duration of latest measured collection cycle before sleeping."
+              },
+              "mt5_poll_ms": {
+                "type": "number",
+                "nullable": true,
+                "description": "Time spent reading ticks from MT5 for the full subscribed set."
+              },
+              "sqlite_write_ms": {
+                "type": "number",
+                "nullable": true,
+                "description": "Time spent batch-upserting latest quotes into SQLite."
+              },
+              "quote_age_max_ms": {
+                "type": "number",
+                "nullable": true,
+                "description": "Maximum age since local receipt among quotes in the latest batch."
+              },
+              "poll_overruns": {
+                "type": "integer",
+                "description": "Cumulative cycles whose measured work exceeded configured poll interval."
+              },
+              "worker_restarts": {
+                "type": "integer"
+              },
+              "online": {
+                "type": "boolean"
+              }
+            }
+          },
+          "market_database_available": {
+            "type": "boolean"
+          },
+          "instruments": {
+            "type": "integer"
+          },
+          "server_time": {
+            "type": "number",
+            "format": "double",
+            "description": "Unix timestamp in seconds."
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "checks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "candle_worker": {
+            "type": "object",
+            "nullable": true,
+            "description": "Candle worker heartbeat and failed count."
+          },
+          "quote_counts": {
+            "type": "object",
+            "properties": {
+              "live": {
+                "type": "integer"
+              },
+              "stale": {
+                "type": "integer"
+              },
+              "warming": {
+                "type": "integer"
+              },
+              "offline": {
+                "type": "integer"
+              },
+              "missing": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "Instrument": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "asset_class": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "digits": {
+            "type": "integer"
+          },
+          "point": {
+            "type": "number"
+          },
+          "available": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Instruments": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "instruments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instrument"
+            }
+          },
+          "server_time": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "Quote": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "price",
+          "bid",
+          "ask",
+          "time",
+          "source",
+          "freshness",
+          "staleFallback"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number",
+            "description": "Midpoint of bid and ask."
+          },
+          "bid": {
+            "type": "number"
+          },
+          "ask": {
+            "type": "number"
+          },
+          "spread": {
+            "type": "number"
+          },
+          "spreadPoints": {
+            "type": "number"
+          },
+          "time": {
+            "type": "number",
+            "format": "double",
+            "description": "Broker tick time as Unix seconds."
+          },
+          "sourceTimestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retrievedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string",
+            "example": "mt5"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "live",
+              "stale",
+              "warming",
+              "offline"
+            ]
+          },
+          "staleFallback": {
+            "type": "boolean"
+          },
+          "delayMinutes": {
+            "type": "number"
+          },
+          "change": {
+            "type": "number",
+            "nullable": true
+          },
+          "changePercent": {
+            "type": "number",
+            "nullable": true
+          },
+          "open": {
+            "type": "number",
+            "nullable": true
+          },
+          "high": {
+            "type": "number",
+            "nullable": true
+          },
+          "low": {
+            "type": "number",
+            "nullable": true
+          },
+          "previousClose": {
+            "type": "number",
+            "nullable": true
+          },
+          "volume": {
+            "type": "number",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "marketState": {
+            "type": "string",
+            "nullable": true
+          },
+          "quoteAgeAtApiMs": {
+            "type": "number",
+            "description": "Milliseconds since the collector received this tick, measured when the API response is assembled. Not broker-market latency."
+          },
+          "brokerTimestampSkewMs": {
+            "type": "number",
+            "description": "Broker tick timestamp minus gateway system time in milliseconds; negative means the broker time appears ahead."
+          }
+        }
+      },
+      "Quotes": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "quotes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteResult"
+            }
+          },
+          "server_time": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "Bar": {
+        "type": "object",
+        "required": [
+          "time",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume"
+        ],
+        "properties": {
+          "time": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Candle opening time as Unix seconds."
+          },
+          "open": {
+            "type": "number"
+          },
+          "high": {
+            "type": "number"
+          },
+          "low": {
+            "type": "number"
+          },
+          "close": {
+            "type": "number"
+          },
+          "volume": {
+            "type": "integer"
+          },
+          "tickVolume": {
+            "type": "integer"
+          },
+          "spread": {
+            "type": "integer"
+          },
+          "realVolume": {
+            "type": "integer"
+          },
+          "source": {
+            "type": "string",
+            "example": "mt5"
+          }
+        }
+      },
+      "History": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "interval": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string",
+            "nullable": true
+          },
+          "bars": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Bar"
+            }
+          },
+          "hasOlder": {
+            "type": "boolean"
+          },
+          "nextBefore": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Use as exclusive before cursor."
+          },
+          "server_time": {
+            "type": "number",
+            "format": "double"
+          },
+          "coverage": {
+            "$ref": "#/components/schemas/Coverage"
+          }
+        }
+      },
+      "QuoteResult": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "status",
+          "freshness",
+          "quote"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unavailable"
+            ]
+          },
+          "freshness": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "live",
+              "stale",
+              "warming",
+              "offline"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "not_subscribed",
+              "quote_not_received",
+              "live_store_unavailable"
+            ]
+          },
+          "quote": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Quote"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "Coverage": {
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "catchupLimited",
+          "gapCount",
+          "unavailableRefreshes",
+          "recentBarCount"
+        ],
+        "properties": {
+          "start": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "Oldest stored candle time, Unix seconds."
+          },
+          "end": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "Newest stored candle time, Unix seconds."
+          },
+          "catchupLimited": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "gapCount": {
+            "type": "integer",
+            "nullable": true
+          },
+          "unavailableRefreshes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "recentBarCount": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Recent bar count maintained by the collector for gap monitoring; it is not a total table count."
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/provider/v1/status": {
+      "get": {
+        "tags": [
+          "Provider"
+        ],
+        "summary": "Provider readiness and collector diagnostics",
+        "responses": {
+          "200": {
+            "description": "Provider status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/provider/v1/instruments": {
+      "get": {
+        "tags": [
+          "Provider"
+        ],
+        "summary": "List subscribed MT5 instruments",
+        "responses": {
+          "200": {
+            "description": "Current subscriptions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Instruments"
+                }
+              }
+            }
+          }
+        },
+        "description": "List the active MT5 subscriptions; optional filters select asset class and match symbol or description.",
+        "parameters": [
+          {
+            "name": "asset_class",
+            "in": "query",
+            "description": "Optional category filter; only one category is allowed.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "fx",
+                "metal"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Case-insensitive substring of symbol or description.",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          }
+        ]
+      }
+    },
+    "/provider/v1/quotes": {
+      "get": {
+        "tags": [
+          "Provider"
+        ],
+        "summary": "Get latest quotes",
+        "description": "Returns one result per requested symbol in request order, including explicit unavailable results. At most 100 symbols per request.",
+        "parameters": [
+          {
+            "name": "symbols",
+            "in": "query",
+            "required": true,
+            "description": "Comma-separated MT5 symbols, 1 to 100.",
+            "schema": {
+              "type": "string",
+              "example": "EURUSD,GBPUSD"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One result per requested symbol; quote is null when unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quotes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid symbols",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Live quote store unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/provider/v1/history/{symbol}": {
+      "get": {
+        "tags": [
+          "Provider"
+        ],
+        "summary": "Read stored candle history",
+        "description": "Returns stored candles only; it does not request missing history from MT5. Bars are in chronological order. Coverage reports all stored rows for the selected symbol and timeframe plus the latest bounded catch-up and gap indicators; these fields do not assert complete broker history.",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9]+$",
+              "example": "EURUSD"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "description": "Native MT5 timeframe or alias such as 1m, 1h, 1d.",
+            "schema": {
+              "type": "string",
+              "default": "M1",
+              "example": "1m"
+            }
+          },
+          {
+            "name": "timeframe",
+            "in": "query",
+            "description": "Alias for interval; takes precedence if both are provided.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "description": "Preset range. Selects a native timeframe and date window from existing data.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1D",
+                "5D",
+                "1M",
+                "6M",
+                "YTD",
+                "1Y",
+                "3Y",
+                "5Y",
+                "10Y",
+                "MAX"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum bars, 1 to 1000 (default 200).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Exclusive Unix seconds pagination cursor.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "description": "Inclusive start Unix seconds.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "Inclusive end Unix seconds.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/History"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid symbol, timeframe, range, or query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "503": {
+              "description": "History database unavailable",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/Error"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

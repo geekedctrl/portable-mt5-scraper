@@ -46,6 +46,13 @@ ordered. Spread is ask minus bid; spread points use the instrument's point.
 Changing tick timestamps indicate new observations; polling alone does not
 manufacture a new tick when the market is quiet.
 
+The quote loop measures cycle duration, aggregate MT5 polling time, batched
+SQLite quote-upsert time, maximum local receipt age within the cycle, and poll
+interval overruns in `collector_status`. Quote API responses separately expose
+age since local receipt and broker timestamp skew; this avoids treating a broker
+clock offset as delivery latency. MT5 calls are collected before acquiring the
+SQLite write transaction, then the latest quotes are upserted in one batch.
+
 Candles come from `copy_rates_from_pos()`, upserted by symbol/timeframe/time.
 Overlapping recent bars update the forming candle and persist the previous
 candle's final values. Per-symbol writes are batched after MT5 calls complete,

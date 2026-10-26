@@ -83,6 +83,17 @@ class LiveCollectorTests(unittest.TestCase):
         changed=app.quote_values('EURUSD',tick,.00001,previous,151)
         self.assertEqual(changed[7:],(151,1))
 
+    def test_quote_upserts_are_batched_and_replace_latest_values(self):
+        with closing(sqlite3.connect(':memory:')) as db:
+            app.create_live_schema(db)
+            first=app.quote_values('EURUSD',NS(bid=1.1,ask=1.2,time=100,time_msc=100001),.01,None,100)
+            second=app.quote_values('GBPUSD',NS(bid=1.3,ask=1.4,time=100,time_msc=100001),.01,None,100)
+            app.write_quotes(db,[first,second,None])
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM latest_quotes').fetchone()[0],2)
+            updated=app.quote_values('EURUSD',NS(bid=1.11,ask=1.21,time=101,time_msc=101001),.01,None,101)
+            app.write_quotes(db,[updated])
+            self.assertEqual(db.execute("SELECT bid FROM latest_quotes WHERE symbol='EURUSD'").fetchone()[0],1.11)
+
     def test_configured_timestamp_offset_applies_to_quotes_and_bars(self):
         tick=NS(bid=1.2,ask=1.2002,time=3700,time_msc=3700001)
         values=app.quote_values('EURUSD',tick,.00001,None,100,time_offset=3600)
@@ -128,10 +139,14 @@ class LiveCollectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             symbols=[instrument('EURUSD','Forex'),instrument('XAUUSD','Metals')]
             tick=NS(bid=1,ask=1.01,time=100,time_msc=100001)
-            env=dict(MARKET_DB=str(Path(directory)/'market.db'),LIVE_DB=str(Path(directory)/'live.db'),LIVE_MAX_BARS='20',LIVE_SEED_BARS='2',LIVE_SYMBOLS='')
+            env=dict(MARKET_DB=str(Path(directory)/'market.db'),LIVE_DB=str(Path(directory)/'live.db'),LIVE_MAX_BARS='20',LIVE_SEED_BARS='2',LIVE_SYMBOLS='',LIVE_POLL_SECONDS='0.5')
             with patch.dict(os.environ,env), patch.object(app.mt5,'symbols_get',return_value=symbols), patch.object(app.mt5,'symbol_select',return_value=True), patch.object(app.mt5,'terminal_info',return_value=NS(connected=True)), patch.object(app.mt5,'symbol_info_tick',return_value=tick), patch.object(app.mt5,'copy_rates_from_pos',return_value=[bar(60),bar(120)]), patch.object(app.mt5,'shutdown'):
                 app.run(max_cycles=1)
             with closing(sqlite3.connect(env['LIVE_DB'])) as db:
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM latest_quotes').fetchone()[0],2)
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM candle_status').fetchone()[0],42)
                 self.assertEqual(db.execute('SELECT connected FROM collector_status').fetchone()[0],0)
+                metrics=db.execute('SELECT cycle_duration_ms,mt5_poll_ms,sqlite_write_ms,poll_overruns FROM collector_status').fetchone()
+                self.assertTrue(all(value is not None for value in metrics[:3]))
+                self.assertGreaterEqual(metrics[3],0)
+                self.assertEqual(db.execute('SELECT quote_interval FROM collector_status').fetchone()[0],.5)

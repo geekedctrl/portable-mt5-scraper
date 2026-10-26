@@ -269,3 +269,10 @@ and [the archived project reference](docs/reference.md) for background.
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).
+
+## Internal market-data API
+
+Gateway serves a read-only v1 provider API for trusted Docker clients at /provider/v1/status, /provider/v1/instruments, /provider/v1/quotes, and /provider/v1/history/{symbol}. To bridge the dashboard/API container onto a local Slate Docker network, see [the Operations guide](docs/knowledge-base/OPERATIONS.md#connect-the-local-slate-stack) and [API contract](docs/knowledge-base/DATA_AND_API.md#gateway-provider-api-v1). Slate needs a provider URL/configuration change before it will consume Gateway data.
+
+Interactive API documentation is available at `http://127.0.0.1:8080/docs` and
+the OpenAPI specification at `http://127.0.0.1:8080/openapi.json`.

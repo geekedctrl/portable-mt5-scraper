@@ -1,6 +1,6 @@
 """Read-only SQLite market-data dashboard; Python standard library only."""
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import base64
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,6 +21,14 @@ COLUMNS = ('time', 'open', 'high', 'low', 'close', 'tick_volume', 'spread', 'rea
 FRAME_SECONDS = {**{f'M{n}': n*60 for n in (1,2,3,4,5,6,10,12,15,20,30)},
                  **{f'H{n}': n*3600 for n in (1,2,3,4,6,8,12)},
                  'D1':86400, 'W1':604800, 'MN1':2592000}
+FRAME_ALIASES = {
+    '1m':'M1','2m':'M2','3m':'M3','4m':'M4','5m':'M5','6m':'M6',
+    '10m':'M10','12m':'M12','15m':'M15','20m':'M20','30m':'M30',
+    '1h':'H1','2h':'H2','3h':'H3','4h':'H4','6h':'H6','8h':'H8','12h':'H12',
+    '1d':'D1','1w':'W1','1mo':'MN1',
+}
+SLATE_RANGE_FRAME = {'1D':'M1','5D':'M15','1M':'M30','6M':'D1','YTD':'D1',
+                     '1Y':'D1','3Y':'W1','5Y':'W1','10Y':'MN1','MAX':'MN1'}
 DASHBOARD_USER = os.environ.get('DASHBOARD_USER', '')
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
 
@@ -54,6 +62,8 @@ def live_snapshot(symbol=None):
                 quote = dict(row)
                 age = max(0, now-quote['changed_at'])
                 quote['unchanged_seconds'] = round(age, 1)
+                quote['receipt_age_seconds'] = round(max(0,now-quote['received_at']),3)
+                quote['broker_timestamp_skew_seconds'] = round(quote['tick_time_msc']/1000-now,3)
                 if not status or not status['online']:
                     quote['status'] = 'offline'
                 elif not quote['seen_change']:
@@ -62,6 +72,184 @@ def live_snapshot(symbol=None):
                     quote['status'] = 'live' if age <= 15 and now-quote['tick_time_msc']/1000 <= 15 else 'stale'
             candles = [dict(r) for r in db.execute('SELECT * FROM candle_status WHERE symbol=?', (symbol,))]
     return dict(instruments=instruments, collector=status, quote=quote, candles=candles, server_time=now)
+
+
+def provider_status():
+    """Small, versioned health payload for trusted internal Docker clients."""
+    now=time.time()
+    snapshot=live_snapshot()
+    collector=snapshot['collector']
+    market_available=DATABASE.is_file()
+    candle_worker=None
+    quote_counts=dict(live=0,stale=0,warming=0,offline=0,missing=0)
+    if LIVE_DATABASE.is_file():
+        with closing(sqlite3.connect(LIVE_DATABASE.resolve().as_uri()+'?mode=ro',uri=True,timeout=1)) as db:
+            db.row_factory=sqlite3.Row
+            db.execute('PRAGMA query_only=ON')
+            worker=db.execute('SELECT updated_at,failed_count FROM candle_health WHERE id=1').fetchone()
+            candle_worker=dict(worker) if worker else None
+            latest={row['symbol']:dict(row) for row in db.execute('SELECT symbol,changed_at,tick_time_msc,seen_change FROM latest_quotes')}
+            for instrument in db.execute('SELECT symbol FROM instruments'):
+                row=latest.get(instrument['symbol'])
+                if not row:
+                    quote_counts['missing']+=1
+                    continue
+                tick_age=now-row['tick_time_msc']/1000
+                if not collector or not collector.get('online'):
+                    freshness='offline'
+                elif not row['seen_change']:
+                    freshness='stale' if tick_age>15 else 'warming'
+                else:
+                    freshness='live' if now-row['changed_at']<=15 and tick_age<=15 else 'stale'
+                quote_counts[freshness]+=1
+    checks=dict(live_database_available=LIVE_DATABASE.is_file(),market_database_available=market_available,
+                collector_online=bool(collector and collector.get('online')),
+                candle_worker_available=candle_worker is not None,
+                candle_worker_healthy=bool(candle_worker is not None and candle_worker.get('failed_count',0)==0))
+    ready=all(checks.values())
+    return dict(provider='mt5-market-gateway',api_version='v1',status='ok' if ready else 'degraded',ready=ready,
+                checks=checks,collector=collector,candle_worker=candle_worker,quote_counts=quote_counts,
+                instruments=len(snapshot['instruments']),server_time=now)
+
+
+def provider_instruments(asset_class=None, search=None):
+    if search and len(search)>100:
+        raise ValueError('search must be at most 100 characters')
+    snapshot=live_snapshot()
+    instruments=[{**item,'available':bool(item['available'])} for item in snapshot['instruments']]
+    if asset_class:
+        requested=asset_class.lower()
+        if requested not in ('fx','metal'):
+            raise ValueError('asset_class must be fx or metal')
+        instruments=[item for item in instruments if item['asset_class'].lower()==requested]
+    if search:
+        term=search.casefold()
+        instruments=[item for item in instruments if term in item['symbol'].casefold() or term in item['description'].casefold()]
+    return dict(provider='mt5-market-gateway',instruments=instruments,server_time=snapshot['server_time'])
+
+
+def provider_quotes(symbols):
+    symbols=list(dict.fromkeys(symbol.upper() for symbol in symbols))
+    if not symbols or len(symbols)>100 or any(not re.fullmatch(r'[A-Z0-9]+',symbol) for symbol in symbols):
+        raise ValueError('Provide 1 to 100 alphanumeric symbols')
+    now=time.time()
+    placeholders=','.join('?' for _ in symbols)
+    if not LIVE_DATABASE.is_file():
+        return dict(provider='mt5-market-gateway',quotes=[dict(symbol=symbol,status='unavailable',freshness='offline',reason='live_store_unavailable',quote=None) for symbol in symbols],server_time=now)
+    with closing(sqlite3.connect(LIVE_DATABASE.resolve().as_uri()+'?mode=ro',uri=True,timeout=1)) as db:
+        db.row_factory=sqlite3.Row
+        db.execute('PRAGMA query_only=ON')
+        instruments={row['symbol']:dict(row) for row in db.execute(
+            f'SELECT * FROM instruments WHERE symbol IN ({placeholders})',symbols)}
+        rows={row['symbol']:dict(row) for row in db.execute(
+            f'SELECT * FROM latest_quotes WHERE symbol IN ({placeholders})',symbols)}
+        status_row=db.execute('SELECT * FROM collector_status WHERE id=1').fetchone()
+        collector=dict(status_row) if status_row else None
+    if collector:
+        collector['online']=bool(collector['connected'] and now-collector['heartbeat']<=max(15,collector['quote_interval']*5))
+    quotes=[]
+    for symbol in symbols:
+        row=rows.get(symbol);instrument=instruments.get(symbol)
+        if not instrument:
+            quotes.append(dict(symbol=symbol,status='unavailable',freshness=None,reason='not_subscribed',quote=None))
+            continue
+        if not row:
+            status='warming' if collector and collector.get('online') else 'offline'
+            quotes.append(dict(symbol=symbol,status='unavailable',freshness=status,reason='quote_not_received',quote=None))
+            continue
+        age=max(0,now-row['changed_at'])
+        tick_age=now-row['tick_time_msc']/1000
+        if not collector or not collector.get('online'):
+            freshness='offline'
+        elif not row['seen_change']:
+            freshness='stale' if tick_age>15 else 'warming'
+        else:
+            freshness='live' if age<=15 and tick_age<=15 else 'stale'
+        tick_time=row['tick_time_msc']/1000
+        quote=dict(
+            symbol=symbol,name=instrument['description'] or symbol,
+            price=round((row['bid']+row['ask'])/2,instrument['digits']),
+            change=None,changePercent=None,open=None,high=None,low=None,previousClose=None,
+            bid=row['bid'],ask=row['ask'],spread=row['spread'],spreadPoints=row['spread_points'],
+            volume=None,avgVolume=None,marketCap=None,pe=None,eps=None,dividendYield=None,
+            week52High=None,week52Low=None,beta=None,sharesOutstanding=None,
+            currency=None,exchange='MT5',marketState=None,time=tick_time,
+            source='mt5',sourceTimestamp=datetime.fromtimestamp(tick_time,timezone.utc).isoformat(),
+            retrievedAt=datetime.fromtimestamp(row['received_at'],timezone.utc).isoformat(),
+            quoteAgeAtApiMs=round(max(0,now-row['received_at'])*1000,3),
+            brokerTimestampSkewMs=round(tick_time*1000-now*1000,3),
+            freshness=freshness,staleFallback=freshness!='live',delayMinutes=round(max(0,now-tick_time)/60,3),
+        )
+        quotes.append(dict(symbol=symbol,status='available',freshness=freshness,quote=quote))
+    return dict(provider='mt5-market-gateway',quotes=quotes,server_time=now)
+
+
+def provider_history(symbol, query):
+    if not re.fullmatch(r'[A-Za-z0-9]+',symbol):
+        raise ValueError('Invalid symbol')
+    symbol=symbol.upper()
+    period=query.get('range',[''])[0].upper()
+    frame=query.get('timeframe',query.get('interval',['M1']))[0]
+    if period:
+        if period not in SLATE_RANGE_FRAME:
+            raise ValueError('Unsupported range')
+        frame=SLATE_RANGE_FRAME[period]
+    else:
+        frame=FRAME_ALIASES.get(frame.lower(),frame.upper())
+    if frame not in FRAME_SECONDS and frame!='MN1':
+        raise ValueError('Unsupported timeframe')
+    table=f'{symbol}_{frame}'
+    with closing(connect()) as db:
+        validate_table(db,table)
+        forwarded=dict(query)
+        # The provider resolves chart presets to a native MT5 timeframe and
+        # date bounds above; load_bars' dashboard range presets are separate.
+        forwarded.pop('range',None)
+        forwarded['table']=[table]
+        if period:
+            latest=db.execute(f'SELECT MAX(time) FROM "{table}" WHERE symbol=? AND timeframe=?',(symbol,frame)).fetchone()[0]
+            if latest is not None and period!='MAX':
+                end=datetime.fromtimestamp(latest,timezone.utc)
+                if period.endswith('D'):
+                    start=end-timedelta(days=int(period[:-1]))
+                elif period=='YTD':
+                    start=datetime(end.year,1,1,tzinfo=timezone.utc)
+                elif period.endswith('Y'):
+                    years=int(period[:-1]);year=end.year-years
+                    start=end.replace(year=year,day=min(end.day,calendar.monthrange(year,end.month)[1]))
+                else:
+                    months=1 if period=='1M' else 6
+                    month_index=end.year*12+end.month-1-months
+                    year,month=divmod(month_index,12)
+                    month+=1
+                    start=end.replace(year=year,month=month,day=min(end.day,calendar.monthrange(year,month)[1]))
+                forwarded['start']=[int(start.timestamp())]
+                forwarded['end']=[latest]
+        coverage=db.execute(f'''SELECT MIN(time) AS first_time,MAX(time) AS last_time
+                                 FROM "{table}" WHERE symbol=? AND timeframe=?''',(symbol,frame)).fetchone()
+        result=load_bars(db,forwarded)
+        candle_status=None
+        if LIVE_DATABASE.is_file():
+            try:
+                with closing(sqlite3.connect(LIVE_DATABASE.resolve().as_uri()+'?mode=ro',uri=True,timeout=1)) as live_db:
+                    live_db.row_factory=sqlite3.Row
+                    live_db.execute('PRAGMA query_only=ON')
+                    row=live_db.execute('SELECT * FROM candle_status WHERE symbol=? AND timeframe=?',(symbol,frame)).fetchone()
+                    candle_status=dict(row) if row else None
+            except sqlite3.Error:
+                candle_status=None
+    bars=[dict(time=row['time'],open=row['open'],high=row['high'],low=row['low'],close=row['close'],
+               volume=row['tick_volume'],tickVolume=row['tick_volume'],spread=row['spread'],
+               realVolume=row['real_volume'],source='mt5') for row in result['bars']]
+    return dict(provider='mt5-market-gateway',symbol=symbol,timeframe=frame,interval=next((k for k,v in FRAME_ALIASES.items() if v==frame),frame),
+                range=period or None,bars=bars,hasOlder=result['has_older'],
+                nextBefore=bars[0]['time'] if bars and result['has_older'] else None,
+                coverage=dict(start=coverage['first_time'],end=coverage['last_time'],
+                              recentBarCount=candle_status['bar_count'] if candle_status else None,
+                              catchupLimited=bool(candle_status['catchup_limited']) if candle_status else None,
+                              gapCount=candle_status['gap_count'] if candle_status else None,
+                              unavailableRefreshes=candle_status['unavailable'] if candle_status else None),
+                server_time=time.time())
 
 
 def validate_table(connection, name):
@@ -196,12 +384,47 @@ class Handler(BaseHTTPRequestHandler):
                 return
         assets = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'),
                   '/style.css': ('style.css', 'text/css')}
+        if url.path == '/openapi.json':
+            self.send(200,(STATIC/'openapi.json').read_bytes(),'application/vnd.oai.openapi+json')
+            return
+        swagger_asset=re.fullmatch(r'/vendor/swagger-ui/(swagger-ui\.css|swagger-ui-bundle\.js|swagger-overrides\.css|swagger-init\.js|favicon-32x32\.png)',url.path)
+        if swagger_asset:
+            filename=swagger_asset.group(1)
+            mime='text/css' if filename.endswith('.css') else 'text/javascript' if filename.endswith('.js') else 'image/png'
+            self.send(200,(STATIC/'vendor'/'swagger-ui'/filename).read_bytes(),mime)
+            return
+        if url.path in ('/docs','/docs/'):
+            self.send(200,(STATIC/'swagger.html').read_bytes(),'text/html')
+            return
         if url.path in assets:
             filename, mime = assets[url.path]
             self.send(200, (STATIC / filename).read_bytes(), mime)
             return
         if url.path == '/health':
             self.send(200, dict(status='ok', database_exists=DATABASE.is_file()))
+            return
+        provider_paths=('/provider/v1/status','/provider/v1/instruments','/provider/v1/quotes')
+        history_match=re.fullmatch(r'/provider/v1/history/([A-Za-z0-9]+)',url.path)
+        if url.path in provider_paths or history_match:
+            try:
+                query=parse_qs(url.query)
+                if url.path=='/provider/v1/status':
+                    result=provider_status()
+                elif url.path=='/provider/v1/instruments':
+                    asset_classes=[value.lower() for item in query.get('asset_class',[]) for value in item.split(',') if value]
+                    if len(asset_classes)>1 or (asset_classes and asset_classes[0] not in ('fx','metal')):
+                        raise ValueError('Invalid asset class filter')
+                    result=provider_instruments(asset_classes[0] if asset_classes else None,query.get('search',[''])[0].strip() or None)
+                elif url.path=='/provider/v1/quotes':
+                    symbols=[item for value in query.get('symbols',[]) for item in value.split(',') if item]
+                    result=provider_quotes(symbols)
+                else:
+                    result=provider_history(history_match.group(1),query)
+                self.send(200,result)
+            except (ValueError,OverflowError):
+                self.send(400,dict(error='Invalid provider query'))
+            except (sqlite3.Error,OSError):
+                self.send(503,dict(error='Market data is unavailable or busy. Retry shortly.'))
             return
         if url.path not in ('/api/tables', '/api/bars', '/api/count', '/api/live'):
             self.send(404, dict(error='Not found'))
