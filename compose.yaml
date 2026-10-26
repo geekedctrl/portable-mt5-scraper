@@ -1,0 +1,58 @@
+services:
+  mt5:
+    container_name: mt5-market-scraper
+    cpus: "${MT5_CPU_LIMIT:-4.0}"
+    mem_limit: ${MT5_MEMORY_LIMIT:-4g}
+    memswap_limit: ${MT5_MEMORY_LIMIT:-4g}
+    pids_limit: ${MT5_PIDS_LIMIT:-512}
+    image: ${MT5_IMAGE:-mt5scraper:local}
+    build: .
+    platform: linux/amd64
+    init: true
+    shm_size: 512mb
+    ports:
+      - "127.0.0.1:6080:6080"
+    environment:
+      MT5_MODE: ${MT5_MODE:-desktop}
+      MT5_LOGIN: ${MT5_LOGIN:-}
+      MT5_PASSWORD: ${MT5_PASSWORD:-}
+      MT5_SERVER: ${MT5_SERVER:-}
+      MT5_MAX_BARS: ${MT5_MAX_BARS:-100000000}
+      MT5_WAIT_SECONDS: ${MT5_WAIT_SECONDS:-600}
+      LIVE_POLL_SECONDS: ${LIVE_POLL_SECONDS:-1}
+      LIVE_CANDLE_SECONDS: ${LIVE_CANDLE_SECONDS:-5}
+      LIVE_MAX_BARS: ${LIVE_MAX_BARS:-1000}
+      LIVE_SEED_BARS: ${LIVE_SEED_BARS:-200}
+      LIVE_SYMBOLS: ${LIVE_SYMBOLS:-}
+      MT5_TIME_OFFSET_SECONDS: ${MT5_TIME_OFFSET_SECONDS:-0}
+    volumes:
+      - mt5-state:/state
+      - ./data:/data
+    stop_grace_period: 30s
+  dashboard:
+    container_name: mt5-data-dashboard
+    cpus: "${DASHBOARD_CPU_LIMIT:-0.25}"
+    mem_limit: ${DASHBOARD_MEMORY_LIMIT:-256m}
+    memswap_limit: ${DASHBOARD_MEMORY_LIMIT:-256m}
+    pids_limit: ${DASHBOARD_PIDS_LIMIT:-64}
+    image: ${DASHBOARD_IMAGE:-mt5scraper-dashboard:local}
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    platform: linux/amd64
+    init: true
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8080}:8080"
+    environment:
+      DATABASE_PATH: ${DASHBOARD_DATABASE_PATH:-/data/market.db}
+    volumes:
+      - ./data:/data:ro
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  mt5-state:

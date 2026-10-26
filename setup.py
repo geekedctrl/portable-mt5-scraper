@@ -8,6 +8,7 @@ setup(
     url='https://github.com/XO30/MT5Scraper',
     author='Stefan Siegler',
     author_email='dev@siegler.one',
+    package_dir={'': 'src'},
     py_modules=['mt5_scraper'],
     classifiers=[
         'Intended Audience :: Data Scientists',

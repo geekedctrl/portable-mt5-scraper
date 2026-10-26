@@ -1,0 +1,15 @@
+*
+!Dockerfile
+!docker/
+!docker/**
+!src/
+!src/scrape_all.py
+!src/xauusd_sqlite.py
+!src/live_collector.py
+
+!.image/
+!.image/terminal64.exe
+
+!dashboard/
+!dashboard/**
+dashboard/**/__pycache__/

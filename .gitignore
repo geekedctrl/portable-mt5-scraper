@@ -138,3 +138,15 @@ mt5_scraper.egg-info/
 # credentials
 mt5_credentials.txt
 example_private.ipynb
+
+# Local container state and downloaded history
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.report.json
+
+# Local proprietary terminal binary and image export bundles
+.image/
+release/

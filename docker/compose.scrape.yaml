@@ -1,0 +1,10 @@
+# Same container: MT5 + scraper + persistent SQLite; keep MT5 open after the job.
+services:
+  mt5:
+    environment:
+      MT5_MODE: stack
+    command:
+      - --max-bars-per-table
+      - "${SCRAPE_MAX_BARS:-0}"
+      - --db
+      - "${SCRAPE_DB:-Z:/data/market.db}"
