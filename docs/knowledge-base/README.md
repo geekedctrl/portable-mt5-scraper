@@ -36,7 +36,7 @@ Checked on **26 October 2026**, using the user's Asia/Kuala_Lumpur date:
 | Tests | 55 passing |
 | Dashboard | Healthy at `http://127.0.0.1:8080/`; published to Slate's internal Docker network |
 | MT5 browser desktop | `http://127.0.0.1:6080/vnc.html` |
-| Git baseline | `b54dea4`, pushed to `geekedctrl/portable-mt5-scraper` |
+| Git baseline | Runtime image from `b54dea4`; `main` tracks `geekedctrl/portable-mt5-scraper` |
 
 This is a dated snapshot, not continuous monitoring. Recheck runtime state before
 acting. Linux deployment, image transfer, two-terminal login, bounded batch-size
