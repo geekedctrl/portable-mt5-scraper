@@ -670,12 +670,15 @@
           {
             "name": "range",
             "in": "query",
-            "description": "Preset range. Selects a native timeframe and date window from existing data.",
+            "description": "History window. With interval/timeframe, selects the date window while interval selects the stored candle timeframe. Without interval, standard presets select their default timeframe.",
             "schema": {
               "type": "string",
               "enum": [
                 "D5",
+                "1D",
+                "5D",
                 "1M",
+                "3M",
                 "6M",
                 "YTD",
                 "1Y",

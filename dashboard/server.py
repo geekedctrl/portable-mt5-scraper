@@ -29,6 +29,7 @@ FRAME_ALIASES = {
 }
 SLATE_RANGE_FRAME = {'D5':'M15','1M':'M30','6M':'D1','YTD':'D1',
                      '1Y':'D1','5Y':'W1','MAX':'MN1'}
+SLATE_WINDOW_RANGE_FRAME = {'1D':'M1','5D':'M15','3M':'H4'}
 DASHBOARD_USER = os.environ.get('DASHBOARD_USER', '')
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
 
@@ -194,13 +195,24 @@ def provider_history(symbol, query):
         raise ValueError('Invalid symbol')
     symbol=symbol.upper()
     period=query.get('range',[''])[0].upper()
-    frame=query.get('timeframe',query.get('interval',['M1']))[0]
+    interval_values=query.get('timeframe',query.get('interval',[]))
+    requested_interval=interval_values[0] if interval_values else None
     if period:
-        if period not in SLATE_RANGE_FRAME:
+        if period not in SLATE_RANGE_FRAME and period not in SLATE_WINDOW_RANGE_FRAME:
             raise ValueError('Unsupported range')
-        frame=SLATE_RANGE_FRAME[period]
+        if requested_interval:
+            frame=FRAME_ALIASES.get(requested_interval.lower(),requested_interval.upper())
+            # Slate's current 4h adapter uses its Yahoo-compatible 1h interval
+            # with a 3-month window. MT5 has a native H4 series, so resolve that
+            # specific request to H4 instead of returning H1 candles.
+            if period=='3M' and requested_interval.lower()=='1h':
+                frame='H4'
+        else:
+            frame=(SLATE_RANGE_FRAME[period] if period in SLATE_RANGE_FRAME
+                   else SLATE_WINDOW_RANGE_FRAME[period])
     else:
-        frame=FRAME_ALIASES.get(frame.lower(),frame.upper())
+        requested_interval=requested_interval or 'M1'
+        frame=FRAME_ALIASES.get(requested_interval.lower(),requested_interval.upper())
     if frame not in FRAME_SECONDS and frame!='MN1':
         raise ValueError('Unsupported timeframe')
     table=f'{symbol}_{frame}'
@@ -217,15 +229,21 @@ def provider_history(symbol, query):
                 end=datetime.fromtimestamp(latest,timezone.utc)
                 if period == 'D5':
                     start=end-timedelta(days=5)
-                elif period.endswith('D'):
-                    start=end-timedelta(days=int(period[:-1]))
                 elif period=='YTD':
                     start=datetime(end.year,1,1,tzinfo=timezone.utc)
+                elif period.endswith('D'):
+                    start=end-timedelta(days=int(period[:-1]))
                 elif period.endswith('Y'):
                     years=int(period[:-1]);year=end.year-years
                     start=end.replace(year=year,day=min(end.day,calendar.monthrange(year,end.month)[1]))
+                elif period.endswith('M'):
+                    months=int(period[:-1])
+                    month_index=end.year*12+end.month-1-months
+                    year,month=divmod(month_index,12)
+                    month+=1
+                    start=end.replace(year=year,month=month,day=min(end.day,calendar.monthrange(year,month)[1]))
                 else:
-                    months=1 if period=='1M' else 6
+                    months=6
                     month_index=end.year*12+end.month-1-months
                     year,month=divmod(month_index,12)
                     month+=1

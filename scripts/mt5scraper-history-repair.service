@@ -1,0 +1,13 @@
+[Unit]
+Description=Retry failed history tables after the active MT5 backfill
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/mt5scraper-deploy/repair-failed-history-tables.sh
+RemainAfterExit=yes
+TimeoutStartSec=infinity
+
+[Install]
+WantedBy=multi-user.target

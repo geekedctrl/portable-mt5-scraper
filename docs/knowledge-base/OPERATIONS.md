@@ -76,6 +76,26 @@ The current defaults are seven FX pairs and seven metals across all nine stored
 intervals. The historical scraper applies `MT5_TIME_OFFSET_SECONDS` to stored
 candle timestamps, matching the live collector.
 
+The VM publishes scrape status every 5 minutes using
+`scripts/report-history-progress.sh` and the systemd unit file
+`scripts/mt5scraper-progress-notifier.service`. The reporter posts the latest candle
+progress line, container/controller state, database size, and free disk to
+`https://ntfy.sh/mt5-scraper`. This ntfy topic is public to anyone who knows
+its name; use a private ntfy server or a hard-to-guess topic if that is not
+suitable. Manage the reporter with `sudo systemctl status`, `stop`, or `start`
+`mt5scraper-progress-notifier.service`. Its percentage is completed tables out
+of the 126 configured symbol/timeframe tables; the in-progress table is shown
+separately because MT5 does not provide a reliable total-bar count for each
+symbol's available history.
+
+Failed historical tables can be retried by
+`mt5scraper-history-repair.service`. It waits for the full-history controller
+to restore live collection, then briefly stops the core and retries only the
+tables recorded as failed against the existing database. It enforces the 15 GiB
+disk floor and restores live mode on exit. Inspect it with
+`sudo systemctl status mt5scraper-history-repair.service`; its detailed logs
+are under `/opt/mt5scraper-deploy/history-repair*.log`.
+
 Copy `.env.example` to `.env` privately and set all three authentication variables:
 `MT5_LOGIN`, `MT5_PASSWORD`, and exact broker `MT5_SERVER`. Do not print `.env`.
 Use the template for the complete current configuration and defaults.

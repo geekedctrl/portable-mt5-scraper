@@ -1,0 +1,15 @@
+[Unit]
+Description=Publish MT5 historical scraper progress to ntfy
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=NTFY_TOPIC=mt5-scraper
+Environment=INTERVAL_SECONDS=300
+ExecStart=/opt/mt5scraper-deploy/report-history-progress.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

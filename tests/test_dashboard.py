@@ -234,6 +234,33 @@ class ProviderApiTests(unittest.TestCase):
             self.assertEqual(result['bars'][0]['volume'],5)
             self.assertEqual(result['coverage'],dict(start=100,end=400,recentBarCount=4,catchupLimited=True,gapCount=2,unavailableRefreshes=0))
 
+    def test_provider_history_uses_interval_with_intraday_date_windows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market,live=self.make_databases(directory)
+            with closing(sqlite3.connect(market)) as db:
+                for frame in ('M5','M15','M30','H1','H4'):
+                    db.execute(f'''CREATE TABLE EURUSD_{frame} (
+                        symbol TEXT,timeframe TEXT,time INTEGER,open REAL,high REAL,
+                        low REAL,close REAL,tick_volume INTEGER,spread INTEGER,
+                        real_volume INTEGER,PRIMARY KEY(symbol,timeframe,time))''')
+                    db.executemany(f'INSERT INTO EURUSD_{frame} VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                   [('EURUSD',frame,t,1,2,.5,1.5,5,1,0)
+                                    for t in [100,200,300,400]])
+                db.commit()
+            requests=[
+                ({'interval':['1m'],'range':['1D']},'M1'),
+                ({'interval':['5m'],'range':['5D']},'M5'),
+                ({'interval':['15m'],'range':['5D']},'M15'),
+                ({'interval':['30m'],'range':['1M']},'M30'),
+                ({'interval':['1h'],'range':['1M']},'H1'),
+                ({'interval':['1h'],'range':['3M']},'H4'),
+            ]
+            with patch.object(app,'DATABASE',market),patch.object(app,'LIVE_DATABASE',live):
+                for query,expected_frame in requests:
+                    result=app.provider_history('EURUSD',query)
+                    self.assertEqual(result['timeframe'],expected_frame)
+                    self.assertTrue(result['bars'])
+
     def test_provider_range_uses_native_bars_and_rejects_invalid_queries(self):
         with tempfile.TemporaryDirectory() as directory:
             market,live=self.make_databases(directory)

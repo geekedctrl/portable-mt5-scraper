@@ -87,10 +87,15 @@ Interactive Swagger UI is served at `/docs` and the OpenAPI 3.0 document at
 | `/provider/v1/history/EURUSD?interval=1m&limit=500&before=...` | Stored candles in chronological order, pagination, and stored coverage metadata |
 
 History intervals accept the nine stored MT5 names and consumer aliases such
-as `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, and `1d`. Chart presets `D5`, `1M`,
-`6M`, `YTD`, `1Y`, `5Y`, and `MAX` select a native stored timeframe and date
-window; they do not trigger broker downloads. Quotes are bounded to 100 symbols per
-request. Quote results use `status=available|unavailable`; unavailable reasons are
+as `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, and `1d`. A history `range` sets the
+date window; when `interval` or `timeframe` is also supplied, that value selects
+the stored candle timeframe. Supported windows are `1D`, `5D`, `D5`, `1M`, `3M`,
+`6M`, `YTD`, `1Y`, `5Y`, and `MAX`. For compatibility with Slate's current chart
+adapter, `interval=1h&range=3M` resolves to native H4 candles. Without an explicit
+interval, standard presets such as `D5`, `1M`, `6M`, `YTD`, `1Y`, `5Y`, and
+`MAX` select their default native timeframe. These are views of stored data and
+do not trigger broker downloads. Quotes are bounded to 100 symbols per request.
+Quote results use `status=available|unavailable`; unavailable reasons are
 `not_subscribed`, `quote_not_received`, or `live_store_unavailable`. A present
 quote has `freshness=live|stale|warming|offline`, `quoteAgeAtApiMs` (time since
 local collector receipt), and `brokerTimestampSkewMs` (broker clock relative to
