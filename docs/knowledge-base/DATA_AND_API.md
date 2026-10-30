@@ -69,6 +69,14 @@ Bar queries support `before` (exclusive) and `start`/`end` (inclusive Unix secon
 Normal browsing avoids full-table counts. Missing `live.db` yields an empty live
 response without creating a new database.
 
+The dashboard chart supports mouse/touch dragging and horizontal trackpad panning.
+It retains loaded pages in memory, requests older bars as the visible window nears
+the oldest loaded candle, and keeps the current candle timestamps anchored while
+merging each page. Older/Newer move through retained candles; Latest reloads the
+newest page. Range and date-filter views remain bounded views and do not auto-page.
+When `has_older` becomes false, the chart marks the oldest locally stored candle;
+this does not mean broker history is complete.
+
 ## Gateway provider API (v1)
 
 The optional read-only provider contract is intended for another trusted service

@@ -5,3 +5,5 @@
 .frames{flex-wrap:wrap;max-width:470px;justify-content:flex-start}.chart-header>div:first-child{min-width:0}.chart-header{flex-wrap:wrap}@media(max-width:750px){.frames{max-width:100%;width:100%}.frames button{flex:0 0 auto;padding:7px 9px}}
 
 .range-presets{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:0 22px 15px}.range-presets>span{font-size:8px;letter-spacing:1.2px;color:var(--muted);margin-right:5px}.range-presets button{border:1px solid #2d3a49;background:#0d141d;color:#9baec1;border-radius:5px;font-size:10px;padding:6px 10px}.range-presets button.active{color:var(--accent);background:#1b3e31;border-color:#35684e}.range-presets small{font-size:9px;color:var(--muted);flex-basis:100%;margin-top:3px;line-height:1.5}@media(max-width:750px){.range-presets{padding:0 14px 14px}.range-presets button{padding:7px 11px}}
+
+#chart{cursor:grab;touch-action:none}#chart.dragging{cursor:grabbing}
