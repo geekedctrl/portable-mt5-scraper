@@ -1,6 +1,7 @@
 """Dashboard pagination, filtering, and database access protections."""
 from contextlib import closing
 import importlib.util
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -99,6 +100,8 @@ class DashboardTests(unittest.TestCase):
                         db.execute('INSERT INTO EURUSD_M1 VALUES (?,?,?,?,?,?,?,?,?,?)',
                                    ('EURUSD','M1',500,1,2,.5,1.5,5,1,0))
                         db.commit()
+                        stat=path.stat()
+                        os.utime(path,ns=(stat.st_atime_ns,stat.st_mtime_ns+1_000_000))
                         refreshed=app.cached_table_list(db)
                         self.assertEqual(scan.call_count,2)
                         self.assertEqual(refreshed[0]['last'],500)
