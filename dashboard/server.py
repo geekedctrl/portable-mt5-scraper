@@ -5,6 +5,7 @@ import base64
 import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -12,6 +13,7 @@ import sqlite3
 import calendar
 import math
 import time
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 DATABASE = Path(os.environ.get('DATABASE_PATH', '/data/market.db'))
@@ -32,6 +34,9 @@ SLATE_RANGE_FRAME = {'D5':'M15','1M':'M30','6M':'D1','YTD':'D1',
 SLATE_WINDOW_RANGE_FRAME = {'1D':'M1','5D':'M15','3M':'H4'}
 DASHBOARD_USER = os.environ.get('DASHBOARD_USER', '')
 DASHBOARD_PASSWORD = os.environ.get('DASHBOARD_PASSWORD', '')
+_coverage_cache_lock = threading.Lock()
+_coverage_cache = {'signature': None, 'tables': None}
+logger = logging.getLogger(__name__)
 
 
 def connect():
@@ -308,6 +313,38 @@ def table_list(connection):
     return tables
 
 
+def database_signature():
+    """Track the database and WAL because committed writes may remain in WAL."""
+    signature = []
+    for path in (DATABASE, Path(str(DATABASE) + '-wal')):
+        try:
+            stat = path.stat()
+            signature.append((stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            signature.append(None)
+    return tuple(signature)
+
+
+def cached_table_list(connection):
+    """Cache indexed per-table coverage while the market DB file is unchanged."""
+    db_path = connection.execute('PRAGMA database_list').fetchone()[2]
+    if not db_path or Path(db_path).resolve() != DATABASE.resolve():
+        return table_list(connection)
+    signature = database_signature()
+    with _coverage_cache_lock:
+        if _coverage_cache['signature'] == signature and _coverage_cache['tables'] is not None:
+            return _coverage_cache['tables']
+        tables = table_list(connection)
+        after = database_signature()
+        # A commit during enumeration could make the snapshot internally stale.
+        # Retry once on the same read-only connection before publishing it.
+        if after != signature:
+            tables = table_list(connection)
+            after = database_signature()
+        _coverage_cache.update(signature=after, tables=tables)
+        return tables
+
+
 def load_bars(connection, query):
     name = query.get('table', [''])[0]
     symbol, frame = validate_table(connection, name)
@@ -329,10 +366,12 @@ def load_bars(connection, query):
 
 def load_range(connection, symbol, period, limit):
     """Cover the requested span using stored candles and bounded OHLC summaries."""
+    range_started = time.perf_counter()
     period=period.upper()
     if period not in ('D5','1M','6M','YTD','1Y','5Y','MAX'):
         raise ValueError('Unsupported history range')
-    candidates=[t for t in table_list(connection) if t['symbol']==symbol and t['first'] is not None]
+    selection_started = time.perf_counter()
+    candidates=[t for t in cached_table_list(connection) if t['symbol']==symbol and t['first'] is not None]
     if not candidates:
         return dict(table=f'{symbol}_H1', bars=[], has_older=False, range=period,
                     source_count=0,aggregated=False,range_start=None,range_end=None)
@@ -361,11 +400,13 @@ def load_range(connection, symbol, period, limit):
     fitting=[t for t in covering if (end-start)/FRAME_SECONDS.get(t['timeframe'],60)<=limit]
     source=min(fitting,key=lambda t:FRAME_SECONDS.get(t['timeframe'],60)) if fitting else max(covering,key=lambda t:FRAME_SECONDS.get(t['timeframe'],60))
     name=source['name'];frame=source['timeframe']
+    selection_ms=(time.perf_counter()-selection_started)*1000
     # Prevent a range overview from monopolizing the dashboard's CPU budget.
     deadline=time.monotonic()+12
     connection.set_progress_handler(lambda:time.monotonic()>deadline,10000)
     where='symbol=? AND timeframe=? AND time>=? AND time<=?'
     params=(symbol,frame,start,end)
+    sql_started=time.perf_counter()
     count=connection.execute(f'SELECT COUNT(*) FROM "{name}" WHERE {where}',params).fetchone()[0]
     aggregated=count>limit
     if not aggregated:
@@ -385,6 +426,9 @@ def load_range(connection, symbol, period, limit):
           WHERE f.symbol=? AND f.timeframe=? AND f.time=b.first_time
             AND l.symbol=? AND l.timeframe=? AND l.time=b.last_time
           ORDER BY f.time''',(start,width,*params,symbol,frame,symbol,frame)).fetchall()
+    sql_ms=(time.perf_counter()-sql_started)*1000
+    logger.info('bars range=%s symbol=%s selection_ms=%.2f sql_ms=%.2f total_ms=%.2f',
+                period,symbol,selection_ms,sql_ms,(time.perf_counter()-range_started)*1000)
     return dict(table=name,bars=[dict(r) for r in rows],has_older=False,range=period,
                 range_start=start,range_end=end,requested_start=requested_start,
                 available_start=oldest,source_count=count,aggregated=aggregated)
@@ -472,6 +516,7 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(url.query)
                 self.send(200, live_snapshot(query.get('symbol', [None])[0]))
                 return
+            request_started = time.perf_counter()
             with closing(connect()) as connection:
                 query = parse_qs(url.query)
                 if url.path == '/api/tables':
@@ -490,6 +535,9 @@ class Handler(BaseHTTPRequestHandler):
                     count = connection.execute(f'SELECT COUNT(*) FROM "{name}" WHERE symbol=? AND timeframe=?', (symbol, frame)).fetchone()[0]
                     result = dict(table=name, count=count)
             self.send(200, result)
+            if url.path == '/api/bars' and query.get('range'):
+                logger.info('bars response range=%s total_response_ms=%.2f',
+                            query['range'][0], (time.perf_counter()-request_started)*1000)
         except (ValueError, OverflowError):
             self.send(400, dict(error='Invalid table, limit, or date filter'))
         except (sqlite3.Error, OSError):

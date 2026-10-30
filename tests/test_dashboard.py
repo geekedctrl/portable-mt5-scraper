@@ -83,6 +83,26 @@ class DashboardTests(unittest.TestCase):
             db.execute('CREATE TABLE notes (value TEXT)')
             self.assertEqual(app.table_list(db),[dict(name='EURUSD_M1',symbol='EURUSD',timeframe='M1',first=100,last=400)])
 
+    def test_range_coverage_cache_reuses_tables_until_database_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'market.db'
+            with closing(sqlite3.connect(path)) as writer: populate(writer)
+            with patch.object(app,'DATABASE',path):
+                app._coverage_cache.update(signature=None,tables=None)
+                with closing(sqlite3.connect(path)) as db:
+                    db.row_factory=sqlite3.Row
+                    with patch.object(app,'table_list',wraps=app.table_list) as scan:
+                        first=app.cached_table_list(db)
+                        again=app.cached_table_list(db)
+                        self.assertEqual(first,again)
+                        self.assertEqual(scan.call_count,1)
+                        db.execute('INSERT INTO EURUSD_M1 VALUES (?,?,?,?,?,?,?,?,?,?)',
+                                   ('EURUSD','M1',500,1,2,.5,1.5,5,1,0))
+                        db.commit()
+                        refreshed=app.cached_table_list(db)
+                        self.assertEqual(scan.call_count,2)
+                        self.assertEqual(refreshed[0]['last'],500)
+
     def test_connection_cannot_write(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'market.db'

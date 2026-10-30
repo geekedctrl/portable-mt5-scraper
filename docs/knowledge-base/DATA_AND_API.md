@@ -127,6 +127,14 @@ an OHLC overview with first open, highest high, lowest low, last close, summed
 volumes, and last spread per bucket. These are display aggregates, not new MT5
 intervals. The query deadline is 12 seconds; output remains bounded to 1000 bars.
 The bucket-first indexed SQL strategy is important for large databases.
+The dashboard caches candle table names and each table's oldest/newest stored
+timestamp in process memory. It reuses that coverage while `market.db`'s file
+size and modification time are unchanged, and refreshes it after a detected
+change. This keeps repeated range selection from rescanning every table. Since
+freshness follows file metadata, changes invisible to both size and modification
+time can remain cached until the next detectable database change or dashboard
+process restart. Range logs report coverage-selection, range SQL, and complete
+response timing without logging query parameters or credentials.
 
 Ranges use stored data only and do not start a history download. Max means the
 oldest available stored history, not guaranteed broker inception. The dashboard
