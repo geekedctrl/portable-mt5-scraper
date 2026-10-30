@@ -7,9 +7,15 @@ services:
       slate-internal:
         aliases:
           - mt5-market-provider
+      slate-production:
+        aliases:
+          - mt5-market-provider
 
 networks:
   default: {}
   slate-internal:
     external: true
-    name: ${SLATE_DOCKER_NETWORK:-slate-local_internal}
+    name: ${SLATE_DOCKER_NETWORK:-slate-dev_internal}
+  slate-production:
+    external: true
+    name: ${SLATE_PROD_DOCKER_NETWORK:-slate_internal}

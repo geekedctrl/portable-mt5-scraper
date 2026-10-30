@@ -110,13 +110,11 @@ complete broker history. Provider readiness is degraded if either database,
 collector, or healthy candle-worker check is unavailable/false.
 
 For local Slate integration, `docker/compose.slate-local.yaml` optionally adds
-only the dashboard/API container to Slate's network, with Docker DNS name
-`mt5-market-provider`. It publishes no additional host port. Set
-`SLATE_DOCKER_NETWORK` if Slate uses a different network, then include the
-overlay when applying the dashboard service (see Operations). The overlay makes
-the API reachable; Slate's quote worker still needs its own provider URL/config
-change before the Slate application consumes it. The gateway does not change
-Slate files or containers.
+only the dashboard/API container to Slate's dev and production networks, with
+Docker DNS name `mt5-market-provider`. It publishes no additional host port.
+Set `SLATE_DOCKER_NETWORK` or `SLATE_PROD_DOCKER_NETWORK` if either network name
+differs, then include the overlay when applying the dashboard service (see
+Operations). Slate's quote worker must also have its provider URL configured.
 
 History views use `/api/bars?table=XAUUSD_H1&range=MAX&limit=200`; allowed range
 values are `D5`, `1M`, `6M`, `YTD`, `1Y`, `5Y`, and `MAX`. Date ranges end at the

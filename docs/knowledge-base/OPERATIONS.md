@@ -26,9 +26,10 @@ Optional dashboard Basic authentication uses `DASHBOARD_USER` and
 
 The optional provider API is served by the dashboard at
 `http://mt5-market-provider:8080/provider/v1` from containers attached to the
-same Docker network. Slate's current local network is `slate-local_internal`;
-set `SLATE_DOCKER_NETWORK` in `.env` if its name differs. Apply the overlay to
-the dashboard service only:
+same Docker network. The overlay attaches it to Slate's dev (`slate-dev_internal`)
+and production (`slate_internal`) networks. Set `SLATE_DOCKER_NETWORK` or
+`SLATE_PROD_DOCKER_NETWORK` in `.env` if either name differs. Apply the overlay
+to the dashboard service only:
 
 ```powershell
 docker compose --project-directory . -p mt5scraper-portable -f docker/compose.server.yaml -f docker/compose.slate-local.yaml up -d --no-deps dashboard
