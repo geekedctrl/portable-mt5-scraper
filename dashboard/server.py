@@ -465,7 +465,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
         assets = {'/': ('index.html', 'text/html'), '/app.js': ('app.js', 'text/javascript'),
-                  '/style.css': ('style.css', 'text/css')}
+                  '/style.css': ('style.css', 'text/css'),
+                  '/chart_paging.js': ('chart_paging.js', 'text/javascript')}
         if url.path == '/openapi.json':
             self.send(200,(STATIC/'openapi.json').read_bytes(),'application/vnd.oai.openapi+json')
             return
